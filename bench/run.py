@@ -23,23 +23,28 @@ RESULTS = ROOT / "bench" / "results"
 PORT = 8765
 
 
-def target_cmds(py: str, workers: int) -> dict[str, list[str]]:
+def target_cmds(py: str, workers: int) -> dict[str, tuple[list[str], str]]:
+    """name -> (command, request path)"""
     uv = [py, "-m", "uvicorn", "--host", "127.0.0.1", "--port", str(PORT),
           "--log-level", "warning", "--loop", "asyncio", "--http", "h11"]
     gr = [py, "-m", "granian", "--host", "127.0.0.1", "--port", str(PORT),
           "--interface", "asgi", "--log-level", "warning"]
+    aether = [py, "bench/aether_app.py", "--port", str(PORT)]
     return {
-        "aether":            [py, "bench/aether_app.py", "--port", str(PORT)],
-        "aether-1w":         [py, "bench/aether_app.py", "--port", str(PORT), "--workers", "1"],
-        "aether-2w":         [py, "bench/aether_app.py", "--port", str(PORT), "--workers", "2"],
-        "aether-4w":         [py, "bench/aether_app.py", "--port", str(PORT), "--workers", "4"],
-        "aether-8w":         [py, "bench/aether_app.py", "--port", str(PORT), "--workers", "8"],
-        "uvicorn-raw":       uv + ["bench.asgi_raw:app"],
-        "uvicorn-raw-Nw":    uv + ["--workers", str(workers), "bench.asgi_raw:app"],
-        "uvicorn-fastapi":   uv + ["bench.fastapi_app:app"],
-        "granian-raw":       gr + ["--workers", "1", "bench.asgi_raw:app"],
-        "granian-raw-Nw":    gr + ["--workers", str(workers), "bench.asgi_raw:app"],
-        "granian-fastapi":   gr + ["--workers", "1", "bench.fastapi_app:app"],
+        "aether":            (aether, "/"),
+        "aether-1w":         (aether + ["--workers", "1"], "/"),
+        "aether-2w":         (aether + ["--workers", "2"], "/"),
+        "aether-4w":         (aether + ["--workers", "4"], "/"),
+        "aether-8w":         (aether + ["--workers", "8"], "/"),
+        "aether-param":      (aether, "/users/42"),
+        "uvicorn-raw":       (uv + ["bench.asgi_raw:app"], "/"),
+        "uvicorn-raw-Nw":    (uv + ["--workers", str(workers), "bench.asgi_raw:app"], "/"),
+        "uvicorn-fastapi":   (uv + ["bench.fastapi_app:app"], "/"),
+        "uvicorn-fastapi-param": (uv + ["bench.fastapi_app:app"], "/users/42"),
+        "granian-raw":       (gr + ["--workers", "1", "bench.asgi_raw:app"], "/"),
+        "granian-raw-Nw":    (gr + ["--workers", str(workers), "bench.asgi_raw:app"], "/"),
+        "granian-fastapi":   (gr + ["--workers", "1", "bench.fastapi_app:app"], "/"),
+        "granian-fastapi-param": (gr + ["--workers", "1", "bench.fastapi_app:app"], "/users/42"),
     }
 
 
@@ -64,7 +69,7 @@ def oha(url: str, seconds: int, conns: int) -> dict:
     return json.loads(out)
 
 
-def run_target(name: str, cmd: list[str], args) -> dict | None:
+def run_target(name: str, cmd: list[str], path: str, args) -> dict | None:
     env = {**os.environ, "PYTHONPATH": str(ROOT)}
     proc = subprocess.Popen(cmd, cwd=ROOT, env=env, start_new_session=True,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
@@ -73,12 +78,13 @@ def run_target(name: str, cmd: list[str], args) -> dict | None:
             err = proc.stderr.read() if proc.stderr else ""
             print(f"  !! {name} failed to start\n{err.strip()[-800:]}", file=sys.stderr)
             return None
-        url = f"http://127.0.0.1:{PORT}/"
+        url = f"http://127.0.0.1:{PORT}{path}"
         oha(url, args.warmup, args.conns)
         r = oha(url, args.duration, args.conns)
         s, p = r["summary"], r["latencyPercentiles"]
         return {
             "target": name,
+            "path": path,
             "rps": s["requestsPerSec"],
             "p50_ms": p["p50"] * 1000,
             "p99_ms": p["p99"] * 1000,
@@ -122,7 +128,7 @@ def main() -> None:
             print(f"unknown target {name!r}; choose from {', '.join(cmds)}", file=sys.stderr)
             sys.exit(2)
         print(f"-> {name}", flush=True)
-        row = run_target(name, cmds[name], args)
+        row = run_target(name, *cmds[name], args)
         if row:
             rows.append(row)
             print(f"   {row['rps']:>10.0f} req/s   p50 {row['p50_ms']:.2f} ms   p99 {row['p99_ms']:.2f} ms")

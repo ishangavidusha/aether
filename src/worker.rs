@@ -6,10 +6,12 @@ use std::sync::Arc;
 use std::thread;
 
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::queue::WorkerQueue;
 use crate::request::Request;
 use crate::responder::Responder;
+use crate::router::{ParamValue, Router};
 
 /// Callable handed to `loop.add_reader`. asyncio invokes it on the worker's own
 /// thread whenever the wake socket becomes readable, and it drains every queued
@@ -18,6 +20,7 @@ use crate::responder::Responder;
 struct Drainer {
     queue: Arc<WorkerQueue>,
     routes: Arc<Vec<Py<PyAny>>>,
+    router: Arc<Router>,
     /// `aether._runtime.run_handler`, an async function.
     run_handler: Py<PyAny>,
     /// Bound `loop.create_task`.
@@ -45,6 +48,25 @@ impl Drainer {
 
         while let Some(item) = self.queue.pop() {
             let handler = self.routes[item.route].bind(py);
+            let spec = self.router.spec(item.route);
+
+            // Handlers with no path parameters skip the dict entirely, so the
+            // hello-world path costs exactly what it did before routing existed.
+            let params = if spec.params.is_empty() {
+                None
+            } else {
+                let dict = PyDict::new(py);
+                for (param, value) in spec.params.iter().zip(item.params) {
+                    match value {
+                        ParamValue::Str(v) => dict.set_item(&param.name, v)?,
+                        ParamValue::Int(v) => dict.set_item(&param.name, v)?,
+                        ParamValue::Float(v) => dict.set_item(&param.name, v)?,
+                        ParamValue::Bool(v) => dict.set_item(&param.name, v)?,
+                    }
+                }
+                Some(dict)
+            };
+
             let request = Py::new(
                 py,
                 Request {
@@ -55,7 +77,7 @@ impl Drainer {
                 },
             )?;
             let responder = Py::new(py, Responder::new(item.reply))?;
-            let coro = run_handler.call1((handler, request, responder))?;
+            let coro = run_handler.call1((handler, request, responder, params))?;
             create_task.call1((coro,))?;
         }
 
@@ -72,7 +94,12 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn spawn(py: Python<'_>, index: usize, routes: Arc<Vec<Py<PyAny>>>) -> PyResult<Self> {
+    pub fn spawn(
+        py: Python<'_>,
+        index: usize,
+        routes: Arc<Vec<Py<PyAny>>>,
+        router: Arc<Router>,
+    ) -> PyResult<Self> {
         let (write_end, read_end) = UnixStream::pair()?;
         write_end.set_nonblocking(true)?;
         read_end.set_nonblocking(true)?;
@@ -91,6 +118,7 @@ impl Worker {
                         let drainer = Drainer {
                             queue: worker_queue,
                             routes,
+                            router,
                             run_handler: runtime.getattr("run_handler")?.unbind(),
                             create_task: event_loop.getattr("create_task")?.unbind(),
                             reader: read_end,

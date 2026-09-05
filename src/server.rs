@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -7,24 +6,23 @@ use std::sync::Arc;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::CONTENT_TYPE;
+use hyper::header::{ALLOW, CONTENT_TYPE};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::queue::Pending;
 use crate::responder::Reply;
+use crate::router::{RouteError, Router};
 use crate::worker::Worker;
 
 struct State {
-    /// method -> path -> index into the shared route table. Two &str lookups,
-    /// no per-request allocation.
-    routes: HashMap<String, HashMap<String, usize>>,
+    router: Arc<Router>,
     workers: Vec<Worker>,
     next_worker: AtomicUsize,
 }
@@ -34,13 +32,16 @@ pub struct Server {
     host: String,
     port: u16,
     worker_count: usize,
-    routes: Vec<(String, String, Py<PyAny>)>,
+    routes: Vec<Route>,
 }
+
+/// (method, path, handler, [(param name, param type)])
+type Route = (String, String, Py<PyAny>, Vec<(String, String)>);
 
 #[pymethods]
 impl Server {
     #[new]
-    fn new(host: String, port: u16, workers: usize, routes: Vec<(String, String, Py<PyAny>)>) -> Self {
+    fn new(host: String, port: u16, workers: usize, routes: Vec<Route>) -> Self {
         Self {
             host,
             port,
@@ -53,23 +54,22 @@ impl Server {
     /// but detaches from the interpreter for the duration.
     fn serve(&self, py: Python<'_>) -> PyResult<()> {
         let handlers: Arc<Vec<Py<PyAny>>> =
-            Arc::new(self.routes.iter().map(|(_, _, h)| h.clone_ref(py)).collect());
+            Arc::new(self.routes.iter().map(|(_, _, h, _)| h.clone_ref(py)).collect());
 
-        let mut table: HashMap<String, HashMap<String, usize>> = HashMap::new();
-        for (i, (method, path, _)) in self.routes.iter().enumerate() {
-            table
-                .entry(method.to_ascii_uppercase())
-                .or_default()
-                .insert(path.clone(), i);
-        }
+        let specs: Vec<(String, String, Vec<(String, String)>)> = self
+            .routes
+            .iter()
+            .map(|(method, path, _, params)| (method.clone(), path.clone(), params.clone()))
+            .collect();
+        let router = Arc::new(Router::build(&specs).map_err(PyValueError::new_err)?);
 
         let mut workers = Vec::with_capacity(self.worker_count);
         for i in 0..self.worker_count {
-            workers.push(Worker::spawn(py, i, handlers.clone())?);
+            workers.push(Worker::spawn(py, i, handlers.clone(), router.clone())?);
         }
 
         let state = Arc::new(State {
-            routes: table,
+            router,
             workers,
             next_worker: AtomicUsize::new(0),
         });
@@ -127,18 +127,35 @@ fn plain(status: StatusCode, msg: &'static str) -> Response<Full<Bytes>> {
         .unwrap()
 }
 
+fn text(status: StatusCode, msg: String) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Full::new(Bytes::from(msg)))
+        .unwrap()
+}
+
+fn method_not_allowed(allow: String) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::METHOD_NOT_ALLOWED)
+        .header(CONTENT_TYPE, "text/plain")
+        .header(ALLOW, allow)
+        .body(Full::new(Bytes::from_static(b"method not allowed")))
+        .unwrap()
+}
+
 async fn handle(
     req: hyper::Request<Incoming>,
     state: Arc<State>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    let route = state
-        .routes
-        .get(req.method().as_str())
-        .and_then(|paths| paths.get(req.uri().path()))
-        .copied();
-
-    let Some(route) = route else {
-        return Ok(plain(StatusCode::NOT_FOUND, "not found"));
+    let matched = match state.router.find(req.method().as_str(), req.uri().path()) {
+        Ok(matched) => matched,
+        Err(RouteError::NotFound) => return Ok(plain(StatusCode::NOT_FOUND, "not found")),
+        Err(RouteError::MethodNotAllowed(allow)) => return Ok(method_not_allowed(allow)),
+        // Coercion runs here, so a bad path parameter never wakes a worker.
+        Err(RouteError::BadParam(msg)) => {
+            return Ok(text(StatusCode::UNPROCESSABLE_ENTITY, msg))
+        }
     };
 
     let method = req.method().as_str().to_owned();
@@ -154,7 +171,8 @@ async fn handle(
     // No Python involvement on this thread: plain Rust data plus one byte
     // written to the worker's wake socket.
     state.workers[idx].queue.push(Pending {
-        route,
+        route: matched.route,
+        params: matched.params,
         method,
         path,
         query,

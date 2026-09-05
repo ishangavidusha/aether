@@ -18,11 +18,14 @@ use crossbeam_queue::SegQueue;
 use tokio::sync::oneshot;
 
 use crate::responder::Reply;
+use crate::router::ParamValue;
 
 /// One request waiting for a Python worker. No Python objects: the handler is
 /// referenced by index into the shared route table.
 pub struct Pending {
     pub route: usize,
+    /// Coerced path parameters, in the order of the route's spec.
+    pub params: Vec<ParamValue>,
     pub method: String,
     pub path: String,
     pub query: Option<String>,

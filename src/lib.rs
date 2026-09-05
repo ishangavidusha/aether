@@ -11,6 +11,7 @@
 mod queue;
 mod request;
 mod responder;
+mod router;
 mod server;
 mod worker;
 

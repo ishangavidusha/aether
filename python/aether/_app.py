@@ -1,22 +1,25 @@
-import inspect
 import sys
 from collections.abc import Callable
 from typing import Any
 
+from ._routing import build_spec
 from ._workers import default_workers, gil_enabled
+
+# (method, path, handler, [(param name, param type)])
+Route = tuple[str, str, Callable[..., Any], list[tuple[str, str]]]
 
 
 class App:
     def __init__(self) -> None:
-        self._routes: list[tuple[str, str, Callable[..., Any]]] = []
+        self._routes: list[Route] = []
 
     def route(self, method: str, path: str):
+        method = method.upper()
+
         def decorator(fn):
-            if not inspect.iscoroutinefunction(fn):
-                raise TypeError(
-                    f"Aether handlers must be `async def` (got {fn.__qualname__})"
-                )
-            self._routes.append((method.upper(), path, fn))
+            # Validates the handler against its path and fails here, at import
+            # time, rather than on the first request.
+            self._routes.append((method, path, fn, build_spec(fn, method, path)))
             return fn
 
         return decorator

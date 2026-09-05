@@ -11,6 +11,11 @@ async def hello(_: Request):
     return {"hello": "world"}
 
 
+@app.get("/users/{user_id}")
+async def user(_: Request, user_id: int):
+    return {"user_id": user_id}
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--port", type=int, default=8000)

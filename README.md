@@ -3,9 +3,10 @@
 A fast Python REST framework with a Rust core, built-in reactive streams, and
 agent-native interfaces. Hobby project, not a product.
 
-**Status: milestone-1 spike.** The only question this code answers is
-*"what does the Rust to Python boundary cost, and how should handlers be dispatched?"*
-Nothing here is API-stable.
+**Status: milestone 2 in progress.** Milestone 1 answered how handlers should be
+dispatched. Milestone 2 is building a real router and typed I/O on top of it.
+Routing and typed path parameters work; request-body validation and OpenAPI do
+not exist yet. Nothing here is API-stable.
 
 ## Design decisions so far
 
@@ -23,19 +24,20 @@ Nothing here is API-stable.
 
 ```
 src/            Rust crate, built as the `aether._core` extension module
-  server.rs     tokio accept loop, hyper HTTP/1.1, routing, enqueue
+  server.rs     tokio accept loop, hyper HTTP/1.1, enqueue
+  router.rs     per-method radix trees, path params coerced in Rust
   queue.rs      lock-free per-worker queue + socketpair wakeup
   worker.rs     one OS thread + one asyncio loop per worker; drain callback
   request.rs    frozen Request pyclass handed to handlers
   responder.rs  one-shot reply channel; JSON is serialized in Rust
-python/aether/  Python package: App, decorators, worker-side runtime
+python/aether/  App, decorators, signature validation, worker-side runtime
 examples/       hello.py
 bench/          baseline apps, hello-world runner, CPU and handler-cost sweeps
-tests/          verify.py dispatch correctness, workers.py worker detection
+tests/          dispatch correctness, routing behaviour, worker detection
 ```
 
-**Request path.** A tokio thread parses the request, looks the route up in a
-two-level `method -> path -> index` table, and pushes a plain Rust struct onto
+**Request path.** A tokio thread parses the request, matches it against a radix
+tree per method, coerces any path parameters, and pushes a plain Rust struct onto
 the chosen worker's lock-free queue. It never attaches to the interpreter. If no
 wakeup is already in flight it writes a single byte to a socketpair that the
 worker's asyncio loop watches via `add_reader`.
@@ -57,7 +59,7 @@ Requires Rust, `uv`, and `oha` (`brew install oha`) for benchmarks.
 make venvs          # creates .venv (3.14t) and .venv-gil (3.14), installs deps
 make build          # maturin develop --release into both venvs
 make run            # examples/hello.py on the free-threaded build
-make verify         # correctness of dispatch under concurrency
+make verify         # routing, dispatch correctness, worker detection
 make bench          # hello-world comparison, free-threaded
 make bench-gil      # hello-world comparison, GIL build
 make bench-cpu      # CPU-bound handler scaling, free-threaded
@@ -79,6 +81,47 @@ async def hello(_: Request):
 
 app.run(port=8000)
 ```
+
+## Routing
+
+Path parameters are declared in the path and typed by the handler's
+annotations. `{*name}` captures the rest of the path.
+
+```python
+@app.get("/users/{user_id}")
+async def get_user(_: Request, user_id: int):
+    return {"user_id": user_id}
+
+@app.get("/files/{*rest}")
+async def get_file(_: Request, rest: str):
+    return {"path": rest}
+```
+
+Coercion happens in Rust, on the same thread that parsed the request, so a bad
+path never wakes a Python worker:
+
+```
+GET /users/42    ->  200  {"user_id": 42}
+GET /users/abc   ->  422  path parameter "user_id" expected integer, got "abc"
+DELETE /users/42 ->  405  Allow: GET
+```
+
+Supported parameter types are `str`, `int`, `float` and `bool`. Anything else is
+a `TypeError` at import time, as is a path parameter the handler does not accept
+or a handler argument that is not in the path. Query parameter binding is not
+implemented yet; read them from `request.query`.
+
+A typed path parameter costs nothing measurable:
+
+| target | req/s |
+|---|---:|
+| aether `/` | 193,270 |
+| aether `/users/{user_id}` | 192,723 |
+| granian + fastapi `/users/{user_id}` | 22,845 |
+| uvicorn + fastapi `/users/{user_id}` | 10,778 |
+
+Routes with no parameters skip the parameter dict entirely, which is why the
+hello-world number did not move when routing landed.
 
 ## Benchmark method
 
