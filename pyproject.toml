@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "aether"
+version = "0.0.1"
+description = "Fast Python REST framework with a Rust core, built-in streams, and agent-native interfaces"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.optional-dependencies]
+bench = ["uvicorn", "granian", "fastapi"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "aether._core"
+features = ["pyo3/extension-module"]

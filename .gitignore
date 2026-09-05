@@ -1,0 +1,10 @@
+/target
+/.venv*
+__pycache__/
+*.so
+*.pyd
+/dist
+/bench/results
+
+# internal working notes, deliberately not tracked
+/docs/

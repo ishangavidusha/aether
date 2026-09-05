@@ -1,0 +1,228 @@
+# Aether
+
+A fast Python REST framework with a Rust core, built-in reactive streams, and
+agent-native interfaces. Hobby project, not a product.
+
+**Status: milestone-1 spike.** The only question this code answers is
+*"what does the Rust to Python boundary cost, and how should handlers be dispatched?"*
+Nothing here is API-stable.
+
+## Design decisions so far
+
+- Rust runtime (tokio + hyper + PyO3). The developer-facing API is Python.
+- Handlers are `async def` only.
+- Streams will be in-memory pub/sub by default with an optional Redis Streams layer.
+- Free-threaded Python 3.14 (`python3.14t`) is the primary target. The GIL build
+  still works, with a single Python worker loop.
+- Worker loops default to the detected parallelism, capped at 8, and to exactly
+  one on GIL builds.
+- Long term: one handler declaration produces a REST route, an OpenAPI entry,
+  an MCP tool, and an agent-callable capability. No new wire protocol yet.
+
+## Layout
+
+```
+src/            Rust crate, built as the `aether._core` extension module
+  server.rs     tokio accept loop, hyper HTTP/1.1, routing, enqueue
+  queue.rs      lock-free per-worker queue + socketpair wakeup
+  worker.rs     one OS thread + one asyncio loop per worker; drain callback
+  request.rs    frozen Request pyclass handed to handlers
+  responder.rs  one-shot reply channel; JSON is serialized in Rust
+python/aether/  Python package: App, decorators, worker-side runtime
+examples/       hello.py
+bench/          baseline apps, hello-world runner, CPU and handler-cost sweeps
+tests/          verify.py dispatch correctness, workers.py worker detection
+```
+
+**Request path.** A tokio thread parses the request, looks the route up in a
+two-level `method -> path -> index` table, and pushes a plain Rust struct onto
+the chosen worker's lock-free queue. It never attaches to the interpreter. If no
+wakeup is already in flight it writes a single byte to a socketpair that the
+worker's asyncio loop watches via `add_reader`.
+
+On the worker thread, a native drain callback consumes the byte, pops every
+queued request, and schedules `run_handler` for each. The handler's return value
+is serialized to JSON in Rust and sent back to the waiting tokio task over a
+oneshot channel.
+
+Two properties matter. Python is only ever touched from the worker's own
+thread, and a burst of requests collapses into one wakeup instead of one per
+request.
+
+## Setup
+
+Requires Rust, `uv`, and `oha` (`brew install oha`) for benchmarks.
+
+```bash
+make venvs          # creates .venv (3.14t) and .venv-gil (3.14), installs deps
+make build          # maturin develop --release into both venvs
+make run            # examples/hello.py on the free-threaded build
+make verify         # correctness of dispatch under concurrency
+make bench          # hello-world comparison, free-threaded
+make bench-gil      # hello-world comparison, GIL build
+make bench-cpu      # CPU-bound handler scaling, free-threaded
+make bench-cpu-gil  # CPU-bound handler scaling, GIL build
+make sweep          # handler cost vs worker loops, free-threaded
+make sweep-gil      # handler cost vs worker loops, GIL build
+```
+
+Hello world:
+
+```python
+from aether import App, Request
+
+app = App()
+
+@app.get("/")
+async def hello(_: Request):
+    return {"hello": "world"}
+
+app.run(port=8000)
+```
+
+## Benchmark method
+
+`bench/run.py` starts each target as a subprocess, warms it up for 2s, then
+measures with `oha` at 64 connections for 8s. `raw` targets are a bare ASGI
+callable returning a pre-encoded body (best case for the server). `Nw` targets
+use one worker per CPU. Results land in `bench/results/*.json`.
+
+Machine: Apple Silicon, 10 cores (4 performance). Numbers below are from the
+first run on 2026-09-06 and will move as the dispatch design changes.
+
+### Hello world, free-threaded Python 3.14.7
+
+| target            | req/s   | p50 ms | p99 ms |
+|-------------------|--------:|-------:|-------:|
+| aether 1 loop     | 189,015 |   0.33 |   0.55 |
+| aether 2 loops    | 198,904 |   0.31 |   0.66 |
+| aether 4 loops    | 197,358 |   0.27 |   1.24 |
+| aether 10 loops   | 171,304 |   0.28 |   1.96 |
+
+Four loops is the current default on this machine. See "Choosing worker loops".
+| uvicorn raw       |  19,493 |   3.30 |   3.42 |
+| uvicorn raw 10w   |  66,474 |   0.65 |   4.61 |
+| uvicorn fastapi   |  12,411 |   5.17 |   5.36 |
+| granian raw       | 137,877 |   0.46 |   0.72 |
+| granian raw 10w   | 123,479 |   0.28 |   1.99 |
+| granian fastapi   |  29,674 |   2.14 |   2.51 |
+
+### Hello world, GIL Python 3.14.7
+
+| target            | req/s   | p50 ms | p99 ms |
+|-------------------|--------:|-------:|-------:|
+| aether 1 loop     | 192,054 |   0.33 |   0.54 |
+| aether 2 loops    | 186,449 |   0.32 |   0.72 |
+| aether 4 loops    | 176,079 |   0.33 |   0.90 |
+| aether 8 loops    | 138,108 |   0.42 |   1.22 |
+| uvicorn raw       |  18,116 |   3.53 |   3.80 |
+| uvicorn raw 10w   |  62,251 |   0.40 |   8.03 |
+| uvicorn fastapi   |  11,572 |   5.55 |   5.72 |
+| granian raw       | 128,733 |   0.50 |   0.78 |
+| granian raw 10w   | 117,680 |   0.32 |   3.76 |
+| granian fastapi   |  35,238 |   1.79 |   2.20 |
+
+### Dispatch rewrite, before and after
+
+The first design woke a worker with `loop.call_soon_threadsafe` per request and
+built `Request`/`Responder` on the tokio thread. The queue design does neither.
+
+| build / loops        | call_soon | queue   | change |
+|----------------------|----------:|--------:|-------:|
+| free-threaded, 1     |    35,158 | 189,015 |  5.4x  |
+| free-threaded, 10    |    14,114 | 171,304 | 12.1x  |
+| GIL, 1               |    63,163 | 192,054 |  3.0x  |
+
+### CPU-bound handler, scaling with worker loops
+
+`bench/cpu.py`, 32 connections, a 20,000-iteration Python loop per request.
+This is the free-threading thesis under test: can one process run Python
+handlers in parallel?
+
+| loops | free-threaded req/s | speedup | GIL req/s | speedup |
+|------:|--------------------:|--------:|----------:|--------:|
+|     1 |               2,659 |   1.00x |     2,308 |   1.00x |
+|     2 |               5,205 |   1.96x |     2,372 |   1.03x |
+|     4 |               8,380 |   3.15x |     2,375 |   1.03x |
+|     8 |               7,201 |   2.71x |     2,357 |   1.02x |
+
+## Findings from the spike
+
+1. **Dispatch was the entire bottleneck, not the language boundary.** Removing
+   per-request Python work from tokio threads gave 5.4x on one loop and 12.1x on
+   ten. The original design's cost was `call_soon_threadsafe` plus constructing
+   two pyclass objects while attached, paid once per request on a thread that
+   had no other reason to touch the interpreter.
+2. **Aether now leads every baseline on hello world**: about 190k req/s against
+   138k for Granian on raw ASGI, 19k for uvicorn, and 12k for FastAPI. Rust-side
+   JSON encoding is included in that number.
+3. **Free-threading delivers on CPU-bound handlers.** Four loops ran 3.15x the
+   throughput of one on 3.14t. The same test on the GIL build is flat at 1.03x
+   no matter how many loops run. This is the result that justifies targeting
+   3.14t: real parallel handler execution in a single process, which is what
+   keeps in-memory streams viable without forcing Redis as a hard dependency.
+4. **Scaling stops at the performance cores.** Eight loops were slower than four
+   on a machine with four performance cores. Efficiency cores hurt more than
+   they help here.
+5. **One worker loop is never the right default on free-threaded builds.** A
+   sweep of handler cost against loop count (below) found no crossover: extra
+   loops win at every handler cost, including a handler that does nothing.
+6. **`os.cpu_count()` was the wrong default** and has been replaced. It counts
+   efficiency cores, where loops lose throughput rather than add it, and inside
+   a container it reports the host's cores rather than the cgroup limit.
+
+## Choosing worker loops
+
+`bench/sweep.py` varies handler CPU cost and loop count together. Handler cost
+is calibrated per interpreter, about 20.2ns per loop iteration on this machine.
+64 connections, 6s per point, free-threaded 3.14.7.
+
+| handler µs | 1 loop | 2 loops | 4 loops | 8 loops | best |
+|---:|---:|---:|---:|---:|:--:|
+| 0 | 184,539 | 190,349 | 193,172 | 173,880 | 4L |
+| 10 | 95,933 | 116,977 | 114,443 | 137,985 | 8L |
+| 50 | 19,159 | 43,052 | 53,605 | 47,497 | 4L |
+| 100 | 10,127 | 20,946 | 30,461 | 27,205 | 4L |
+| 500 | 2,154 | 4,202 | 7,347 | 6,031 | 4L |
+
+Four loops, the performance-core count here, was best or within a few percent at
+every handler cost, worst case 83% of the best result. One loop falls to 29-36%
+of achievable once a handler does real work. The same sweep on the GIL build is
+flat and extra loops only cost throughput.
+
+So the default is **the detected parallelism, capped at 8, and exactly 1 on GIL
+builds**. `python/aether/_workers.py` takes the most constrained answer from
+performance cores, physical cores, cgroup CPU quota and available CPUs, because
+the target is cores that can genuinely run Python at the same time. Override it
+with `app.run(workers=N)`.
+
+One clarification the sweep does not cover: awaiting I/O does not need more
+loops. An await yields the loop, so one loop can hold thousands of them. What
+needs more loops is CPU time spent inside the handler.
+
+## Correctness
+
+`tests/verify.py` drives 5,000 concurrent requests, each carrying a unique
+token, and asserts every response returns its own token. This is the check that
+matters for queue dispatch, where the plausible bug is a reply delivered to the
+wrong request. It passes on both builds, with the handler invoked exactly 5,000
+times and all worker loops used.
+
+```bash
+make verify
+```
+
+## Open questions for milestone 2
+
+- The queue is unbounded, so a handler that falls behind grows it until memory
+  runs out. Needs a backpressure policy, and the same one should apply to
+  stream topics later.
+- Does the single-drain-callback design hold up with slow handlers, where one
+  loop's queue backs up while others idle? Round-robin assignment is naive;
+  least-loaded may be needed.
+- The worker cap of 8 is a guard, not a measured limit. The sweep ran on a
+  machine with four performance cores, so it cannot say whether scaling
+  continues past 8 on a large homogeneous server.
+- Where do streams attach? A per-worker loop means an in-memory topic is shared
+  across loops in one process, which is the design the free-threading result
+  makes possible.
