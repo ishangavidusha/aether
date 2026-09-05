@@ -1,6 +1,8 @@
 """Aether hello-world with CLI args, used by bench/run.py."""
 import argparse
 
+from pydantic import BaseModel
+
 from aether import App, Request
 
 app = App()
@@ -14,6 +16,23 @@ async def hello(_: Request):
 @app.get("/users/{user_id}")
 async def user(_: Request, user_id: int):
     return {"user_id": user_id}
+
+
+class UserIn(BaseModel):
+    name: str
+    age: int
+    email: str
+
+
+class UserOut(BaseModel):
+    id: int
+    name: str
+    age: int
+
+
+@app.post("/users")
+async def create_user(_: Request, body: UserIn):
+    return UserOut(id=1, name=body.name, age=body.age)
 
 
 if __name__ == "__main__":

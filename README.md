@@ -5,8 +5,8 @@ agent-native interfaces. Hobby project, not a product.
 
 **Status: milestone 2 in progress.** Milestone 1 answered how handlers should be
 dispatched. Milestone 2 is building a real router and typed I/O on top of it.
-Routing and typed path parameters work; request-body validation and OpenAPI do
-not exist yet. Nothing here is API-stable.
+Routing, typed path parameters, body validation and backpressure work. Query
+parameter binding and OpenAPI do not exist yet. Nothing here is API-stable.
 
 ## Design decisions so far
 
@@ -26,14 +26,14 @@ not exist yet. Nothing here is API-stable.
 src/            Rust crate, built as the `aether._core` extension module
   server.rs     tokio accept loop, hyper HTTP/1.1, enqueue
   router.rs     per-method radix trees, path params coerced in Rust
-  queue.rs      lock-free per-worker queue + socketpair wakeup
+  queue.rs      bounded per-worker queue + socketpair wakeup
   worker.rs     one OS thread + one asyncio loop per worker; drain callback
   request.rs    frozen Request pyclass handed to handlers
   responder.rs  one-shot reply channel; JSON is serialized in Rust
-python/aether/  App, decorators, signature validation, worker-side runtime
+python/aether/  App, decorators, signature validation, pydantic binding, runtime
 examples/       hello.py
 bench/          baseline apps, hello-world runner, CPU and handler-cost sweeps
-tests/          dispatch correctness, routing behaviour, worker detection
+tests/          dispatch, routing, bodies, backpressure, worker detection
 ```
 
 **Request path.** A tokio thread parses the request, matches it against a radix
@@ -102,7 +102,7 @@ path never wakes a Python worker:
 
 ```
 GET /users/42    ->  200  {"user_id": 42}
-GET /users/abc   ->  422  path parameter "user_id" expected integer, got "abc"
+GET /users/abc   ->  422  {"detail": [{"type": "path_param_parsing", ...}]}
 DELETE /users/42 ->  405  Allow: GET
 ```
 
@@ -122,6 +122,65 @@ A typed path parameter costs nothing measurable:
 
 Routes with no parameters skip the parameter dict entirely, which is why the
 hello-world number did not move when routing landed.
+
+## Request bodies
+
+An argument annotated with a pydantic model binds the request body. Returning a
+model serializes it, and only the fields that model declares are sent.
+
+```python
+from pydantic import BaseModel
+
+class UserIn(BaseModel):
+    name: str
+    age: int
+
+class UserOut(BaseModel):
+    id: int
+    name: str
+
+@app.post("/users")
+async def create_user(_: Request, body: UserIn):
+    return UserOut(id=1, name=body.name)
+```
+
+A body that fails validation returns 422 carrying pydantic's own errors, in the
+same `{"detail": [...]}` shape as a path parameter failure, so a client parses
+one format for every 422.
+
+Validation runs on the worker thread rather than in Rust, which is the one place
+Aether wakes Python before rejecting bad input. It costs about 13%:
+
+| target | req/s |
+|---|---:|
+| aether hello world | 192,684 |
+| aether validated POST | 168,241 |
+| granian + fastapi validated POST | 17,928 |
+| uvicorn + fastapi validated POST | 10,046 |
+
+Both sides run the same pydantic version on the same models, so that gap is
+dispatch and serialization, not validation.
+
+Pydantic is a dependency, but Aether imports and runs without it. Only body
+models need it.
+
+## Backpressure
+
+Each worker accepts at most `max_concurrency` requests at once, counting both
+queued and in-flight. Beyond that the request tries another worker, and if every
+worker is full the server answers 503 with `Retry-After`.
+
+```python
+app.run(max_concurrency=1024)   # the default, per worker loop
+```
+
+Counting in-flight requests is the part that matters. The drain callback empties
+the queue into asyncio tasks immediately, so a handler that awaits I/O leaves
+the queue near empty while requests pile up inside the loop. Bounding the queue
+alone would look like backpressure and protect nothing.
+
+Lower it for slow handlers, where a deep backlog only adds latency before an
+inevitable client timeout. Raise it to absorb larger bursts of fast requests.
 
 ## Benchmark method
 
@@ -255,11 +314,8 @@ times and all worker loops used.
 make verify
 ```
 
-## Open questions for milestone 2
+## Open questions
 
-- The queue is unbounded, so a handler that falls behind grows it until memory
-  runs out. Needs a backpressure policy, and the same one should apply to
-  stream topics later.
 - Does the single-drain-callback design hold up with slow handlers, where one
   loop's queue backs up while others idle? Round-robin assignment is naive;
   least-loaded may be needed.

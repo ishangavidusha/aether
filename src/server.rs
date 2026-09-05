@@ -6,7 +6,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::{ALLOW, CONTENT_TYPE};
+use hyper::header::{ALLOW, CONTENT_TYPE, RETRY_AFTER};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Response, StatusCode};
@@ -32,6 +32,7 @@ pub struct Server {
     host: String,
     port: u16,
     worker_count: usize,
+    max_concurrency: usize,
     routes: Vec<Route>,
 }
 
@@ -41,11 +42,18 @@ type Route = (String, String, Py<PyAny>, Vec<(String, String)>);
 #[pymethods]
 impl Server {
     #[new]
-    fn new(host: String, port: u16, workers: usize, routes: Vec<Route>) -> Self {
+    fn new(
+        host: String,
+        port: u16,
+        workers: usize,
+        max_concurrency: usize,
+        routes: Vec<Route>,
+    ) -> Self {
         Self {
             host,
             port,
             worker_count: workers.max(1),
+            max_concurrency: max_concurrency.max(1),
             routes,
         }
     }
@@ -65,7 +73,13 @@ impl Server {
 
         let mut workers = Vec::with_capacity(self.worker_count);
         for i in 0..self.worker_count {
-            workers.push(Worker::spawn(py, i, handlers.clone(), router.clone())?);
+            workers.push(Worker::spawn(
+                py,
+                i,
+                handlers.clone(),
+                router.clone(),
+                self.max_concurrency,
+            )?);
         }
 
         let state = Arc::new(State {
@@ -127,11 +141,20 @@ fn plain(status: StatusCode, msg: &'static str) -> Response<Full<Bytes>> {
         .unwrap()
 }
 
-fn text(status: StatusCode, msg: String) -> Response<Full<Bytes>> {
+fn json(status: StatusCode, body: Vec<u8>) -> Response<Full<Bytes>> {
     Response::builder()
         .status(status)
-        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(Full::new(Bytes::from(msg)))
+        .header(CONTENT_TYPE, "application/json")
+        .body(Full::new(Bytes::from(body)))
+        .unwrap()
+}
+
+fn overloaded() -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header(CONTENT_TYPE, "text/plain")
+        .header(RETRY_AFTER, "1")
+        .body(Full::new(Bytes::from_static(b"server overloaded")))
         .unwrap()
 }
 
@@ -153,8 +176,8 @@ async fn handle(
         Err(RouteError::NotFound) => return Ok(plain(StatusCode::NOT_FOUND, "not found")),
         Err(RouteError::MethodNotAllowed(allow)) => return Ok(method_not_allowed(allow)),
         // Coercion runs here, so a bad path parameter never wakes a worker.
-        Err(RouteError::BadParam(msg)) => {
-            return Ok(text(StatusCode::UNPROCESSABLE_ENTITY, msg))
+        Err(RouteError::BadParam(err)) => {
+            return Ok(json(StatusCode::UNPROCESSABLE_ENTITY, err.to_json()))
         }
     };
 
@@ -166,11 +189,7 @@ async fn handle(
     };
 
     let (reply_tx, reply_rx) = oneshot::channel::<Reply>();
-    let idx = state.next_worker.fetch_add(1, Ordering::Relaxed) % state.workers.len();
-
-    // No Python involvement on this thread: plain Rust data plus one byte
-    // written to the worker's wake socket.
-    state.workers[idx].queue.push(Pending {
+    let mut pending = Pending {
         route: matched.route,
         params: matched.params,
         method,
@@ -178,7 +197,30 @@ async fn handle(
         query,
         body: collected.to_bytes().to_vec(),
         reply: reply_tx,
-    });
+    };
+
+    // No Python involvement on this thread: plain Rust data plus one byte
+    // written to the worker's wake socket. Start round-robin, but fall through
+    // to any worker with room, so one slow handler cannot stall its share of
+    // traffic while other loops sit idle.
+    let start = state.next_worker.fetch_add(1, Ordering::Relaxed);
+    let count = state.workers.len();
+    let mut queued = false;
+    for offset in 0..count {
+        let idx = (start + offset) % count;
+        match state.workers[idx].queue.try_push(pending) {
+            Ok(()) => {
+                queued = true;
+                break;
+            }
+            Err(returned) => pending = returned,
+        }
+    }
+    if !queued {
+        // Every queue is full. Shed the request now rather than let it wait
+        // behind work the server has already failed to keep up with.
+        return Ok(overloaded());
+    }
 
     match reply_rx.await {
         Ok(reply) => Ok(Response::builder()

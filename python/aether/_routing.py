@@ -4,6 +4,8 @@ Path parameters are declared in the path as `{name}`, or `{*name}` to capture
 the rest of the path. Their types come from the handler's annotations, and the
 Rust router coerces them before a worker is ever woken.
 
+A handler argument annotated with a pydantic model binds the request body.
+
 Everything here runs once, at registration. Mistakes surface at import time with
 a message naming the handler, rather than as a confusing 500 on the first
 request.
@@ -14,6 +16,14 @@ import re
 import typing
 from collections.abc import Callable
 from typing import Any
+
+from ._schema import (
+    HAVE_PYDANTIC,
+    RequestValidationError,
+    ValidationError,
+    is_model,
+    validation_body,
+)
 
 # Matches {name} and {*name}. Deliberately strict: an unbalanced or oddly named
 # placeholder should be a clear error, not a route that silently never matches.
@@ -38,8 +48,32 @@ def _annotations(fn: Callable[..., Any]) -> dict[str, Any]:
         return dict(getattr(fn, "__annotations__", {}))
 
 
-def build_spec(fn: Callable[..., Any], method: str, path: str) -> list[tuple[str, str]]:
-    """Validate the handler against its path and return [(name, type name)]."""
+def bind_body(fn: Callable[..., Any], name: str, model: Any) -> Callable[..., Any]:
+    """Wrap a handler so its body argument is validated before it runs.
+
+    Only routes that declare a body pay for this extra frame.
+    """
+
+    async def handler(request, **params):
+        try:
+            params[name] = model.model_validate_json(request.body)
+        except ValidationError as exc:
+            raise RequestValidationError(validation_body(exc)) from None
+        return await fn(request, **params)
+
+    handler.__name__ = getattr(fn, "__name__", "handler")
+    handler.__qualname__ = getattr(fn, "__qualname__", "handler")
+    return handler
+
+
+def build_spec(
+    fn: Callable[..., Any], method: str, path: str
+) -> tuple[list[tuple[str, str]], tuple[str, Any] | None]:
+    """Validate the handler against its path.
+
+    Returns the path parameter spec and, if the handler declares one, the name
+    and model of its body argument.
+    """
     where = f"{method} {path} -> {fn.__qualname__}"
 
     if not inspect.iscoroutinefunction(fn):
@@ -76,12 +110,28 @@ def build_spec(fn: Callable[..., Any], method: str, path: str) -> list[tuple[str
             f"{'them' if len(missing) > 1 else 'it'}"
         )
 
-    extra = [p.name for p in accepted if p.name not in set(names)]
-    if extra:
+    # Anything not in the path must be a pydantic model, which becomes the body.
+    body: tuple[str, Any] | None = None
+    leftover = [p for p in accepted if p.name not in set(names)]
+    for param in leftover:
+        annotation = hints.get(param.name)
+        if is_model(annotation):
+            if body is not None:
+                raise TypeError(
+                    f"{where}: handler declares two body models, "
+                    f"{body[0]!r} and {param.name!r}. Only one is allowed"
+                )
+            body = (param.name, annotation)
+            continue
+        hint = (
+            "install pydantic and annotate it with a BaseModel to bind the request body"
+            if not HAVE_PYDANTIC
+            else "annotate it with a pydantic BaseModel to bind the request body, "
+            "or read query parameters from `request.query`"
+        )
         raise TypeError(
-            f"{where}: handler accepts {', '.join(repr(n) for n in extra)}, which "
-            f"{'are' if len(extra) > 1 else 'is'} not in the path. Query parameter "
-            f"binding is not implemented yet; read them from `request.query`"
+            f"{where}: handler accepts {param.name!r}, which is not a path "
+            f"parameter. Query parameter binding is not implemented yet; {hint}"
         )
 
     spec: list[tuple[str, str]] = []
@@ -101,4 +151,4 @@ def build_spec(fn: Callable[..., Any], method: str, path: str) -> list[tuple[str
                 f"supported. Use one of: {supported}"
             )
         spec.append((name, kind))
-    return spec
+    return spec, body

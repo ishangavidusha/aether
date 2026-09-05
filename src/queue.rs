@@ -12,7 +12,7 @@
 
 use std::io::Write;
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crossbeam_queue::SegQueue;
 use tokio::sync::oneshot;
@@ -40,21 +40,62 @@ pub struct WorkerQueue {
     notified: AtomicBool,
     /// Write end of the socketpair. The read end lives in the `Drainer`.
     waker: UnixStream,
+    /// Requests handed to the worker and not yet finished. Counted alongside
+    /// the queue, because bounding the queue alone is not backpressure: the
+    /// drain callback empties it into asyncio tasks immediately, so a handler
+    /// that awaits I/O leaves the queue empty while thousands of requests pile
+    /// up in the loop. Queued plus in-flight is the number that matters.
+    inflight: AtomicUsize,
+    /// Hard limit on queued + in-flight requests for this worker. Unbounded
+    /// growth does not fail gracefully: memory climbs until it runs out, and
+    /// every pending request is a connection held open with a client waiting
+    /// on a reply that will arrive long after it stopped caring.
+    limit: usize,
 }
 
 impl WorkerQueue {
-    pub fn new(waker: UnixStream) -> Self {
+    pub fn new(waker: UnixStream, limit: usize) -> Self {
         Self {
             queue: SegQueue::new(),
             notified: AtomicBool::new(false),
             waker,
+            inflight: AtomicUsize::new(0),
+            limit,
         }
     }
 
-    /// Called from tokio threads.
-    pub fn push(&self, item: Pending) {
+    pub fn load(&self) -> usize {
+        self.queue.len() + self.inflight.load(Ordering::Relaxed)
+    }
+
+    pub fn has_room(&self) -> bool {
+        self.load() < self.limit
+    }
+
+    /// The drain callback claims a request: it leaves the queue and becomes
+    /// in-flight. Brief undercounting between the two is harmless, since the
+    /// limit is a pressure valve rather than an invariant.
+    pub fn claim(&self) {
+        self.inflight.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Called when a `Responder` is dropped, which happens whether the handler
+    /// replied, raised, or was cancelled.
+    pub fn release(&self) {
+        self.inflight.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// Called from tokio threads. Returns the item when this worker is at its
+    /// limit, so the caller can try another worker or shed the request.
+    pub fn try_push(&self, item: Pending) -> Result<(), Pending> {
+        // Racy against other producers. Overshooting by a few under a burst is
+        // fine; what matters is that the number cannot grow without bound.
+        if !self.has_room() {
+            return Err(item);
+        }
         self.queue.push(item);
         self.wake();
+        Ok(())
     }
 
     pub fn pop(&self) -> Option<Pending> {

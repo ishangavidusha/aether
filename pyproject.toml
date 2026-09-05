@@ -7,7 +7,7 @@ name = "aether"
 version = "0.0.1"
 description = "Fast Python REST framework with a Rust core, built-in streams, and agent-native interfaces"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = ["pydantic>=2.9"]
 
 [project.optional-dependencies]
 bench = ["uvicorn", "granian", "fastapi"]

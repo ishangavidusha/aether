@@ -1,4 +1,6 @@
-"""Aether basics: routes, typed path parameters, and raw request access."""
+"""Aether basics: routes, typed path parameters, and validated bodies."""
+
+from pydantic import BaseModel, Field
 
 from aether import App, Request
 
@@ -27,6 +29,23 @@ async def get_issue(_: Request, org: str, repo: str, number: int):
 @app.get("/files/{*rest}")
 async def get_file(_: Request, rest: str):
     return {"path": rest}
+
+
+class UserIn(BaseModel):
+    name: str = Field(min_length=1)
+    age: int = Field(ge=0)
+
+
+class UserOut(BaseModel):
+    id: int
+    name: str
+
+
+# An argument annotated with a pydantic model binds the request body. Returning
+# a model serializes it, and only the fields that model declares are sent.
+@app.post("/users")
+async def create_user(_: Request, body: UserIn):
+    return UserOut(id=1, name=body.name)
 
 
 @app.post("/echo")

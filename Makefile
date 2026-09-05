@@ -36,11 +36,15 @@ bench-cpu-gil: build-gil
 verify: build-ft
 	.venv/bin/python tests/workers.py
 	.venv/bin/python tests/routing.py
+	.venv/bin/python tests/bodies.py
+	.venv/bin/python tests/backpressure.py
 	.venv/bin/python tests/verify.py
 
 verify-gil: build-gil
 	.venv-gil/bin/python tests/workers.py
 	.venv-gil/bin/python tests/routing.py
+	.venv-gil/bin/python tests/bodies.py
+	.venv-gil/bin/python tests/backpressure.py
 	.venv-gil/bin/python tests/verify.py
 
 sweep: build-ft

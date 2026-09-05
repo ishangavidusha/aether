@@ -1,8 +1,10 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use tokio::sync::oneshot;
+
+use crate::queue::WorkerQueue;
 
 /// What the Python side hands back for one request.
 pub struct Reply {
@@ -16,12 +18,23 @@ pub struct Reply {
 #[pyclass(frozen, name = "Responder", module = "aether._core")]
 pub struct Responder {
     tx: Mutex<Option<oneshot::Sender<Reply>>>,
+    /// Holding the worker's queue lets the in-flight count fall when this
+    /// responder is dropped, which is the only place that reliably runs whether
+    /// the handler replied, raised, or was cancelled mid-await.
+    queue: Arc<WorkerQueue>,
+}
+
+impl Drop for Responder {
+    fn drop(&mut self) {
+        self.queue.release();
+    }
 }
 
 impl Responder {
-    pub fn new(tx: oneshot::Sender<Reply>) -> Self {
+    pub fn new(tx: oneshot::Sender<Reply>, queue: Arc<WorkerQueue>) -> Self {
         Self {
             tx: Mutex::new(Some(tx)),
+            queue,
         }
     }
 

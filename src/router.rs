@@ -59,13 +59,35 @@ pub struct RouteSpec {
     pub params: Vec<ParamSpec>,
 }
 
+/// A path parameter that failed to coerce. Rendered in the same shape pydantic
+/// uses for body errors, so a client sees one error format for every 422.
+pub struct ParamError {
+    pub name: String,
+    pub expected: &'static str,
+    pub got: String,
+}
+
+impl ParamError {
+    pub fn to_json(&self) -> Vec<u8> {
+        let detail = serde_json::json!({
+            "detail": [{
+                "type": "path_param_parsing",
+                "loc": ["path", self.name],
+                "msg": format!("Input should be a valid {}", self.expected),
+                "input": self.got,
+            }]
+        });
+        serde_json::to_vec(&detail).unwrap_or_else(|_| b"{\"detail\":[]}".to_vec())
+    }
+}
+
 /// Why a request could not be routed.
 pub enum RouteError {
     NotFound,
     /// Path exists under other methods; carries the `Allow` header value.
     MethodNotAllowed(String),
-    /// A parameter did not coerce; carries a message for the 422 body.
-    BadParam(String),
+    /// A parameter did not coerce.
+    BadParam(ParamError),
 }
 
 pub struct Matched {
@@ -155,14 +177,11 @@ impl Router {
     }
 }
 
-fn coerce(raw: &str, param: &ParamSpec) -> Result<ParamValue, String> {
-    let bad = || {
-        format!(
-            "path parameter {:?} expected {}, got {:?}",
-            param.name,
-            param.kind.label(),
-            raw
-        )
+fn coerce(raw: &str, param: &ParamSpec) -> Result<ParamValue, ParamError> {
+    let bad = || ParamError {
+        name: param.name.clone(),
+        expected: param.kind.label(),
+        got: raw.to_owned(),
     };
     match param.kind {
         ParamKind::Str => Ok(ParamValue::Str(raw.to_owned())),

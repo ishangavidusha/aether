@@ -47,6 +47,7 @@ impl Drainer {
         let create_task = self.create_task.bind(py);
 
         while let Some(item) = self.queue.pop() {
+            self.queue.claim();
             let handler = self.routes[item.route].bind(py);
             let spec = self.router.spec(item.route);
 
@@ -76,7 +77,7 @@ impl Drainer {
                     body: item.body,
                 },
             )?;
-            let responder = Py::new(py, Responder::new(item.reply))?;
+            let responder = Py::new(py, Responder::new(item.reply, self.queue.clone()))?;
             let coro = run_handler.call1((handler, request, responder, params))?;
             create_task.call1((coro,))?;
         }
@@ -99,12 +100,13 @@ impl Worker {
         index: usize,
         routes: Arc<Vec<Py<PyAny>>>,
         router: Arc<Router>,
+        limit: usize,
     ) -> PyResult<Self> {
         let (write_end, read_end) = UnixStream::pair()?;
         write_end.set_nonblocking(true)?;
         read_end.set_nonblocking(true)?;
 
-        let queue = Arc::new(WorkerQueue::new(write_end));
+        let queue = Arc::new(WorkerQueue::new(write_end, limit));
         let worker_queue = queue.clone();
         let (tx, rx) = mpsc::channel::<PyResult<(Py<PyAny>, Py<PyAny>)>>();
 

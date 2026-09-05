@@ -23,28 +23,37 @@ RESULTS = ROOT / "bench" / "results"
 PORT = 8765
 
 
-def target_cmds(py: str, workers: int) -> dict[str, tuple[list[str], str]]:
-    """name -> (command, request path)"""
+POST_JSON = ["-m", "POST", "-H", "content-type: application/json",
+             "-d", '{"name":"ada","age":36,"email":"ada@example.com"}']
+
+
+def target_cmds(py: str, workers: int) -> dict[str, tuple[list[str], str, list[str]]]:
+    """name -> (command, request path, extra oha args)"""
     uv = [py, "-m", "uvicorn", "--host", "127.0.0.1", "--port", str(PORT),
           "--log-level", "warning", "--loop", "asyncio", "--http", "h11"]
     gr = [py, "-m", "granian", "--host", "127.0.0.1", "--port", str(PORT),
           "--interface", "asgi", "--log-level", "warning"]
     aether = [py, "bench/aether_app.py", "--port", str(PORT)]
+    fastapi_uv = uv + ["bench.fastapi_app:app"]
+    fastapi_gr = gr + ["--workers", "1", "bench.fastapi_app:app"]
     return {
-        "aether":            (aether, "/"),
-        "aether-1w":         (aether + ["--workers", "1"], "/"),
-        "aether-2w":         (aether + ["--workers", "2"], "/"),
-        "aether-4w":         (aether + ["--workers", "4"], "/"),
-        "aether-8w":         (aether + ["--workers", "8"], "/"),
-        "aether-param":      (aether, "/users/42"),
-        "uvicorn-raw":       (uv + ["bench.asgi_raw:app"], "/"),
-        "uvicorn-raw-Nw":    (uv + ["--workers", str(workers), "bench.asgi_raw:app"], "/"),
-        "uvicorn-fastapi":   (uv + ["bench.fastapi_app:app"], "/"),
-        "uvicorn-fastapi-param": (uv + ["bench.fastapi_app:app"], "/users/42"),
-        "granian-raw":       (gr + ["--workers", "1", "bench.asgi_raw:app"], "/"),
-        "granian-raw-Nw":    (gr + ["--workers", str(workers), "bench.asgi_raw:app"], "/"),
-        "granian-fastapi":   (gr + ["--workers", "1", "bench.fastapi_app:app"], "/"),
-        "granian-fastapi-param": (gr + ["--workers", "1", "bench.fastapi_app:app"], "/users/42"),
+        "aether":            (aether, "/", []),
+        "aether-1w":         (aether + ["--workers", "1"], "/", []),
+        "aether-2w":         (aether + ["--workers", "2"], "/", []),
+        "aether-4w":         (aether + ["--workers", "4"], "/", []),
+        "aether-8w":         (aether + ["--workers", "8"], "/", []),
+        "aether-param":      (aether, "/users/42", []),
+        "aether-body":       (aether, "/users", POST_JSON),
+        "uvicorn-raw":       (uv + ["bench.asgi_raw:app"], "/", []),
+        "uvicorn-raw-Nw":    (uv + ["--workers", str(workers), "bench.asgi_raw:app"], "/", []),
+        "uvicorn-fastapi":   (fastapi_uv, "/", []),
+        "uvicorn-fastapi-param": (fastapi_uv, "/users/42", []),
+        "uvicorn-fastapi-body":  (fastapi_uv, "/users", POST_JSON),
+        "granian-raw":       (gr + ["--workers", "1", "bench.asgi_raw:app"], "/", []),
+        "granian-raw-Nw":    (gr + ["--workers", str(workers), "bench.asgi_raw:app"], "/", []),
+        "granian-fastapi":   (fastapi_gr, "/", []),
+        "granian-fastapi-param": (fastapi_gr, "/users/42", []),
+        "granian-fastapi-body":  (fastapi_gr, "/users", POST_JSON),
     }
 
 
@@ -61,15 +70,16 @@ def wait_port(port: int, proc: subprocess.Popen, timeout: float = 20.0) -> bool:
     return False
 
 
-def oha(url: str, seconds: int, conns: int) -> dict:
+def oha(url: str, seconds: int, conns: int, extra: list[str]) -> dict:
     out = subprocess.run(
-        ["oha", "--no-tui", "--output-format", "json", "-z", f"{seconds}s", "-c", str(conns), url],
+        ["oha", "--no-tui", "--output-format", "json", "-z", f"{seconds}s",
+         "-c", str(conns), *extra, url],
         capture_output=True, text=True, check=True,
     ).stdout
     return json.loads(out)
 
 
-def run_target(name: str, cmd: list[str], path: str, args) -> dict | None:
+def run_target(name: str, cmd: list[str], path: str, extra: list[str], args) -> dict | None:
     env = {**os.environ, "PYTHONPATH": str(ROOT)}
     proc = subprocess.Popen(cmd, cwd=ROOT, env=env, start_new_session=True,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
@@ -79,8 +89,8 @@ def run_target(name: str, cmd: list[str], path: str, args) -> dict | None:
             print(f"  !! {name} failed to start\n{err.strip()[-800:]}", file=sys.stderr)
             return None
         url = f"http://127.0.0.1:{PORT}{path}"
-        oha(url, args.warmup, args.conns)
-        r = oha(url, args.duration, args.conns)
+        oha(url, args.warmup, args.conns, extra)
+        r = oha(url, args.duration, args.conns, extra)
         s, p = r["summary"], r["latencyPercentiles"]
         return {
             "target": name,
