@@ -27,6 +27,8 @@ struct Drainer {
     create_task: Py<PyAny>,
     /// Read end of the wake socketpair.
     reader: UnixStream,
+    /// Handed to each `Responder` so streams can watch for disconnects.
+    runtime: tokio::runtime::Handle,
 }
 
 #[pymethods]
@@ -80,7 +82,10 @@ impl Drainer {
                     body: item.body,
                 },
             )?;
-            let responder = Py::new(py, Responder::new(item.reply, self.queue.clone()))?;
+            let responder = Py::new(
+                py,
+                Responder::new(item.reply, self.queue.clone(), self.runtime.clone()),
+            )?;
             let coro = run_handler.call1((handler, request, responder, params))?;
             create_task.call1((coro,))?;
         }
@@ -104,6 +109,7 @@ impl Worker {
         routes: Arc<Vec<Py<PyAny>>>,
         router: Arc<Router>,
         limit: usize,
+        tokio_handle: tokio::runtime::Handle,
     ) -> PyResult<Self> {
         let (write_end, read_end) = UnixStream::pair()?;
         write_end.set_nonblocking(true)?;
@@ -127,6 +133,7 @@ impl Worker {
                             run_handler: runtime.getattr("run_handler")?.unbind(),
                             create_task: event_loop.getattr("create_task")?.unbind(),
                             reader: read_end,
+                            runtime: tokio_handle,
                         };
                         let fd = drainer.reader.as_raw_fd();
                         event_loop.call_method1("add_reader", (fd, Py::new(py, drainer)?))?;

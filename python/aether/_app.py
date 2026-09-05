@@ -6,6 +6,7 @@ from typing import Any
 from . import _openapi
 from ._response import Response
 from ._routing import RouteInfo, build_route
+from ._streams import DROP_OLDEST, Topic
 from ._workers import default_workers, gil_enabled
 
 # Requests a single worker loop will accept at once, queued plus in-flight,
@@ -25,6 +26,7 @@ class App:
     ) -> None:
         """`openapi_url` and `docs_url` can each be set to None to disable them."""
         self.routes: list[RouteInfo] = []
+        self._topics: dict[str, Topic] = {}
         self.title = title
         self.version = version
         self.description = description
@@ -53,6 +55,27 @@ class App:
 
     def delete(self, path: str):
         return self.route("DELETE", path)
+
+    def topic(
+        self, name: str, maxsize: int | None = None, policy: str | None = None
+    ) -> Topic:
+        """Get or create a named topic.
+
+        Shared across every worker loop in the process, so a message emitted by
+        one handler reaches subscribers running on all of them. `maxsize` and
+        `policy` apply only when the topic is first created.
+        """
+        existing = self._topics.get(name)
+        if existing is not None:
+            return existing
+        created = Topic(name, maxsize=maxsize or 1024, policy=policy or DROP_OLDEST)
+        # Racing handlers could both create one; keep whichever landed first so
+        # every worker sees the same object.
+        return self._topics.setdefault(name, created)
+
+    @property
+    def topics(self) -> dict[str, Topic]:
+        return dict(self._topics)
 
     def openapi(self) -> dict[str, Any]:
         """The OpenAPI 3.1 document for the routes registered so far.

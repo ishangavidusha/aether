@@ -8,5 +8,11 @@ and OpenAPI 3.1 generated from the same route metadata.
 from ._app import App
 from ._core import Request
 from ._response import Response
+from ._sse import SSE, Event
+from ._streams import BLOCK, DROP_NEWEST, DROP_OLDEST, ERROR, Subscription, Topic, TopicFull
 
-__all__ = ["App", "Request", "Response"]
+__all__ = [
+    "App", "Request", "Response", "SSE", "Event",
+    "Topic", "Subscription", "TopicFull",
+    "BLOCK", "DROP_NEWEST", "DROP_OLDEST", "ERROR",
+]

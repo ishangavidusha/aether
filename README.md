@@ -3,10 +3,10 @@
 A fast Python REST framework with a Rust core, built-in reactive streams, and
 agent-native interfaces. Hobby project, not a product.
 
-**Status: milestone 2 in progress.** Milestone 1 answered how handlers should be
-dispatched. Milestone 2 is building a real router and typed I/O on top of it.
-Routing, typed path and query parameters, pydantic bodies, backpressure and
-OpenAPI 3.1 all work. Nothing here is API-stable.
+**Status: milestone 3 in progress.** Routing, typed path and query parameters,
+pydantic bodies, backpressure and OpenAPI 3.1 all work. Streams work over
+Server-Sent Events; WebSocket is the remaining half of this milestone. Nothing
+here is API-stable.
 
 ## Design decisions so far
 
@@ -27,13 +27,14 @@ src/            Rust crate, built as the `aether._core` extension module
   server.rs     tokio accept loop, hyper HTTP/1.1, enqueue
   router.rs     per-method radix trees, path and query params coerced in Rust
   queue.rs      bounded per-worker queue + socketpair wakeup
+  responder.rs  reply channel, streaming bodies, disconnect signal
   worker.rs     one OS thread + one asyncio loop per worker; drain callback
   request.rs    frozen Request pyclass handed to handlers
   responder.rs  one-shot reply channel; JSON is serialized in Rust
-python/aether/  App, decorators, signature validation, pydantic, OpenAPI, runtime
+python/aether/  App, routing, pydantic, OpenAPI, topics, SSE, worker runtime
 examples/       hello.py
 bench/          baseline apps, hello-world runner, CPU and handler-cost sweeps
-tests/          dispatch, routing, query, bodies, openapi, backpressure, workers
+tests/          dispatch, routing, query, bodies, openapi, streams, sse, ...
 ```
 
 **Request path.** A tokio thread parses the request, matches it against a radix
@@ -201,6 +202,72 @@ the 422 shape all appear in the document. Nested models are hoisted into
 `components/schemas`. The output is checked against `openapi-spec-validator` in
 the test suite, so "valid OpenAPI 3.1" is verified rather than assumed.
 
+## Streams
+
+A topic is a named fan-out point. Producers emit, subscribers iterate.
+
+```python
+@app.post("/say")
+async def say(_: Request, body: Message):
+    return {"delivered_to": await app.topic("feed").emit(body)}
+
+@app.get("/events")
+async def events(_: Request):
+    return SSE(app.topic("feed").subscribe())
+```
+
+**Subscribers on different worker loops all receive every message.** That is the
+whole reason for targeting free-threaded Python. The server runs several event
+loops in one process, clients land on whichever loop takes their request, and a
+message published through any of them reaches all of them because they share
+memory. Under a multiprocess server each worker would hold a private copy of the
+topic and this would silently not work.
+
+Backpressure is per topic or per subscription:
+
+| policy | when a subscriber's buffer is full |
+|---|---|
+| `drop_oldest` | discard the oldest buffered message. The default |
+| `drop_newest` | discard the message being emitted |
+| `block` | producer waits for room, guaranteeing delivery |
+| `error` | raise `TopicFull` at the producer |
+
+`drop_oldest` is the default because a feed would rather lose history for one
+slow reader than stall every producer.
+
+Topics are plain Python, not Rust. Both ends are already Python, so a Rust
+buffer would add a foreign-function crossing on emit and on receive to replace a
+deque operation cheaper than either crossing. Waking a subscriber costs anything
+at all only when it is idle, so a busy stream coalesces naturally.
+
+## Server-Sent Events
+
+Return an `SSE` and Aether streams it. The source is any async iterable, so a
+topic subscription is the common case but a generator works too.
+
+```python
+@app.get("/clock")
+async def clock(_: Request):
+    async def ticks():
+        while True:
+            yield datetime.datetime.now().isoformat()
+            await asyncio.sleep(1)
+    return SSE(ticks())
+```
+
+Values are encoded as JSON, or sent as-is if they are already strings. Yield an
+`Event` to set a name, an id, or a client retry hint. Idle connections get a
+keep-alive comment every `ping` seconds, 15 by default, so proxies do not close
+them.
+
+A disconnected client is detected without polling. The response body carries a
+guard that hyper drops when the connection ends, and the pump races that against
+the next message. Without it a stream waiting on a quiet topic would never
+notice its client had left, leaking the subscription indefinitely.
+
+`examples/live_feed.py` is a working chat page: open it in several tabs and post
+a message.
+
 ## Explicit responses
 
 Return a `Response` when you need a specific status code or content type.
@@ -213,7 +280,11 @@ async def teapot(_: Request):
     return Response(b"short and stout", status=418, content_type="text/plain")
 ```
 
-Custom headers are not plumbed through yet.
+Custom headers go in `headers`:
+
+```python
+Response(b"...", headers={"x-request-id": "abc"})
+```
 
 ## Backpressure
 
@@ -368,7 +439,10 @@ make verify
 ## Known gaps
 
 - `HEAD` returns 405 everywhere. HTTP requires it wherever `GET` is allowed.
-- No custom response headers, no cookies, no middleware, no auth.
+- No WebSocket yet; the other half of milestone 3.
+- No cookies, no middleware, no auth.
+- Topics are in-memory only. Durability and cross-machine fan-out via Redis
+  Streams is milestone 4.
 - Query parameters cannot be lists; a repeated key uses the first value.
 - No `UUID` or date parameter types yet.
 

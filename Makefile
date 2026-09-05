@@ -39,6 +39,8 @@ verify: build-ft
 	.venv/bin/python tests/query.py
 	.venv/bin/python tests/bodies.py
 	.venv/bin/python tests/openapi.py
+	.venv/bin/python tests/streams.py
+	.venv/bin/python tests/sse.py
 	.venv/bin/python tests/backpressure.py
 	.venv/bin/python tests/verify.py
 
@@ -48,6 +50,8 @@ verify-gil: build-gil
 	.venv-gil/bin/python tests/query.py
 	.venv-gil/bin/python tests/bodies.py
 	.venv-gil/bin/python tests/openapi.py
+	.venv-gil/bin/python tests/streams.py
+	.venv-gil/bin/python tests/sse.py
 	.venv-gil/bin/python tests/backpressure.py
 	.venv-gil/bin/python tests/verify.py
 

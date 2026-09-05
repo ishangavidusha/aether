@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::body::{Frame, Incoming};
 use hyper::header::{ALLOW, CONTENT_TYPE, RETRY_AFTER};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -15,9 +16,11 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt;
 
 use crate::queue::Pending;
-use crate::responder::Reply;
+use crate::responder::{Body, Reply};
 use crate::router::{RouteError, Router, SpecTuple};
 use crate::worker::Worker;
 
@@ -71,6 +74,13 @@ impl Server {
             .collect();
         let router = Arc::new(Router::build(&specs).map_err(PyValueError::new_err)?);
 
+        // Built before the workers, because each Responder needs a handle to
+        // spawn its disconnect watcher on.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PyRuntimeError::new_err(format!("tokio runtime: {e}")))?;
+
         let mut workers = Vec::with_capacity(self.worker_count);
         for i in 0..self.worker_count {
             workers.push(Worker::spawn(
@@ -79,6 +89,7 @@ impl Server {
                 handlers.clone(),
                 router.clone(),
                 self.max_concurrency,
+                runtime.handle().clone(),
             )?);
         }
 
@@ -91,11 +102,6 @@ impl Server {
         let addr: SocketAddr = format!("{}:{}", self.host, self.port)
             .parse()
             .map_err(|e| PyRuntimeError::new_err(format!("bad address: {e}")))?;
-
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| PyRuntimeError::new_err(format!("tokio runtime: {e}")))?;
 
         let shutdown = state.clone();
         let result: Result<(), String> = py.detach(|| runtime.block_on(serve_loop(addr, state)));
@@ -133,44 +139,52 @@ async fn serve_loop(addr: SocketAddr, state: Arc<State>) -> Result<(), String> {
     Ok(())
 }
 
-fn plain(status: StatusCode, msg: &'static str) -> Response<Full<Bytes>> {
+/// Responses are either a complete buffer or a stream of chunks, so every
+/// helper hands back the same boxed body type.
+type Out = BoxBody<Bytes, Infallible>;
+
+fn full(bytes: Bytes) -> Out {
+    Full::new(bytes).boxed()
+}
+
+fn plain(status: StatusCode, msg: &'static str) -> Response<Out> {
     Response::builder()
         .status(status)
         .header(CONTENT_TYPE, "text/plain")
-        .body(Full::new(Bytes::from_static(msg.as_bytes())))
+        .body(full(Bytes::from_static(msg.as_bytes())))
         .unwrap()
 }
 
-fn json(status: StatusCode, body: Vec<u8>) -> Response<Full<Bytes>> {
+fn json(status: StatusCode, body: Vec<u8>) -> Response<Out> {
     Response::builder()
         .status(status)
         .header(CONTENT_TYPE, "application/json")
-        .body(Full::new(Bytes::from(body)))
+        .body(full(Bytes::from(body)))
         .unwrap()
 }
 
-fn overloaded() -> Response<Full<Bytes>> {
+fn overloaded() -> Response<Out> {
     Response::builder()
         .status(StatusCode::SERVICE_UNAVAILABLE)
         .header(CONTENT_TYPE, "text/plain")
         .header(RETRY_AFTER, "1")
-        .body(Full::new(Bytes::from_static(b"server overloaded")))
+        .body(full(Bytes::from_static(b"server overloaded")))
         .unwrap()
 }
 
-fn method_not_allowed(allow: String) -> Response<Full<Bytes>> {
+fn method_not_allowed(allow: String) -> Response<Out> {
     Response::builder()
         .status(StatusCode::METHOD_NOT_ALLOWED)
         .header(CONTENT_TYPE, "text/plain")
         .header(ALLOW, allow)
-        .body(Full::new(Bytes::from_static(b"method not allowed")))
+        .body(full(Bytes::from_static(b"method not allowed")))
         .unwrap()
 }
 
 async fn handle(
     req: hyper::Request<Incoming>,
     state: Arc<State>,
-) -> Result<Response<Full<Bytes>>, Infallible> {
+) -> Result<Response<Out>, Infallible> {
     let matched = match state
         .router
         .find(req.method().as_str(), req.uri().path(), req.uri().query())
@@ -226,11 +240,33 @@ async fn handle(
     }
 
     match reply_rx.await {
-        Ok(reply) => Ok(Response::builder()
-            .status(reply.status)
-            .header(CONTENT_TYPE, reply.content_type)
-            .body(Full::new(Bytes::from(reply.body)))
-            .unwrap()),
+        Ok(reply) => {
+            let body = match reply.body {
+                Body::Full(bytes) => full(Bytes::from(bytes)),
+                // Headers go out now; chunks follow as the handler produces
+                // them, which is what makes SSE possible. `guard` is moved into
+                // the closure so it lives exactly as long as the body, and its
+                // drop is what tells the handler the client has gone.
+                Body::Stream(rx, guard) => StreamBody::new(ReceiverStream::new(rx).map(
+                    move |chunk| {
+                        let _keep_alive = &guard;
+                        Ok::<_, Infallible>(Frame::data(chunk))
+                    },
+                ))
+                .boxed(),
+            };
+            let mut builder = Response::builder()
+                .status(reply.status)
+                .header(CONTENT_TYPE, reply.content_type);
+            for (name, value) in &reply.headers {
+                builder = builder.header(name.as_str(), value.as_str());
+            }
+            // A handler-supplied header could be malformed; fall back rather
+            // than kill the connection.
+            Ok(builder
+                .body(body)
+                .unwrap_or_else(|_| plain(StatusCode::INTERNAL_SERVER_ERROR, "bad response header")))
+        }
         Err(_) => Ok(plain(
             StatusCode::INTERNAL_SERVER_ERROR,
             "handler finished without responding",
