@@ -44,16 +44,19 @@ def target_cmds(py: str, workers: int) -> dict[str, tuple[list[str], str, list[s
         "aether-8w":         (aether + ["--workers", "8"], "/", []),
         "aether-param":      (aether, "/users/42", []),
         "aether-body":       (aether, "/users", POST_JSON),
+        "aether-query":      (aether, "/search?q=abc&limit=5", []),
         "uvicorn-raw":       (uv + ["bench.asgi_raw:app"], "/", []),
         "uvicorn-raw-Nw":    (uv + ["--workers", str(workers), "bench.asgi_raw:app"], "/", []),
         "uvicorn-fastapi":   (fastapi_uv, "/", []),
         "uvicorn-fastapi-param": (fastapi_uv, "/users/42", []),
         "uvicorn-fastapi-body":  (fastapi_uv, "/users", POST_JSON),
+        "uvicorn-fastapi-query": (fastapi_uv, "/search?q=abc&limit=5", []),
         "granian-raw":       (gr + ["--workers", "1", "bench.asgi_raw:app"], "/", []),
         "granian-raw-Nw":    (gr + ["--workers", str(workers), "bench.asgi_raw:app"], "/", []),
         "granian-fastapi":   (fastapi_gr, "/", []),
         "granian-fastapi-param": (fastapi_gr, "/users/42", []),
         "granian-fastapi-body":  (fastapi_gr, "/users", POST_JSON),
+        "granian-fastapi-query": (fastapi_gr, "/search?q=abc&limit=5", []),
     }
 
 
@@ -125,10 +128,19 @@ def main() -> None:
     args = ap.parse_args()
 
     py = str(Path(args.python).absolute())  # keep the venv symlink
+
+    # Recorded because it burned an hour once: a "3.5% regression" turned out to
+    # be nothing but leftover load from the previous benchmark run.
+    load_before = os.getloadavg()
+    if load_before[0] > 2.0:
+        print(f"WARNING: 1-minute load average is {load_before[0]:.1f}. Results will be "
+              f"depressed and are not comparable with a quiet run.\n", file=sys.stderr)
     info = subprocess.run(
         [py, "-c", "import sys;print(sys.version.split()[0], 'gil' if sys._is_gil_enabled() else 'free-threaded')"],
         capture_output=True, text=True, check=True).stdout.strip()
-    print(f"python: {py}\nbuild : {info}\nload  : {args.conns} conns x {args.duration}s (warmup {args.warmup}s)\n")
+    print(f"python: {py}\nbuild : {info}")
+    print(f"load  : {args.conns} conns x {args.duration}s (warmup {args.warmup}s)")
+    print(f"sysload: {load_before[0]:.2f} at start\n")
 
     cmds = target_cmds(py, args.workers)
     names = args.targets or list(cmds)
@@ -150,7 +162,13 @@ def main() -> None:
     RESULTS.mkdir(exist_ok=True)
     tag = "ft" if "free-threaded" in info else "gil"
     out = RESULTS / f"{tag}-{time.strftime('%Y%m%d-%H%M%S')}.json"
-    out.write_text(json.dumps({"python": info, "args": vars(args), "rows": rows}, indent=2))
+    out.write_text(json.dumps({
+        "python": info,
+        "args": vars(args),
+        "loadavg_before": load_before,
+        "loadavg_after": os.getloadavg(),
+        "rows": rows,
+    }, indent=2))
     print(f"\nsaved {out.relative_to(ROOT)}")
 
 

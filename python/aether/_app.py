@@ -1,12 +1,12 @@
+import json
 import sys
 from collections.abc import Callable
 from typing import Any
 
-from ._routing import bind_body, build_spec
+from . import _openapi
+from ._response import Response
+from ._routing import RouteInfo, build_route
 from ._workers import default_workers, gil_enabled
-
-# (method, path, handler, [(param name, param type)])
-Route = tuple[str, str, Callable[..., Any], list[tuple[str, str]]]
 
 # Requests a single worker loop will accept at once, queued plus in-flight,
 # before the server sheds load. Enough to absorb a burst of fast requests
@@ -15,8 +15,21 @@ DEFAULT_MAX_CONCURRENCY = 1024
 
 
 class App:
-    def __init__(self) -> None:
-        self._routes: list[Route] = []
+    def __init__(
+        self,
+        title: str = "Aether",
+        version: str = "0.1.0",
+        description: str = "",
+        openapi_url: str | None = "/openapi.json",
+        docs_url: str | None = "/docs",
+    ) -> None:
+        """`openapi_url` and `docs_url` can each be set to None to disable them."""
+        self.routes: list[RouteInfo] = []
+        self.title = title
+        self.version = version
+        self.description = description
+        self.openapi_url = openapi_url
+        self.docs_url = docs_url
 
     def route(self, method: str, path: str):
         method = method.upper()
@@ -24,9 +37,7 @@ class App:
         def decorator(fn):
             # Validates the handler against its path and fails here, at import
             # time, rather than on the first request.
-            spec, body = build_spec(fn, method, path)
-            target = fn if body is None else bind_body(fn, *body)
-            self._routes.append((method, path, target, spec))
+            self.routes.append(build_route(fn, method, path))
             return fn
 
         return decorator
@@ -42,6 +53,38 @@ class App:
 
     def delete(self, path: str):
         return self.route("DELETE", path)
+
+    def openapi(self) -> dict[str, Any]:
+        """The OpenAPI 3.1 document for the routes registered so far.
+
+        Built from the same metadata the router uses, so it cannot describe an
+        endpoint the server would not accept. Callable without running the
+        server, which makes it usable for client generation in CI.
+        """
+        return _openapi.build(self.routes, self.title, self.version, self.description)
+
+    def _register_docs(self) -> None:
+        """Add the OpenAPI and docs routes, unless the user turned them off."""
+        registered = {(r.method, r.path) for r in self.routes}
+
+        if self.openapi_url and ("GET", self.openapi_url) not in registered:
+            # Serialized once at startup, not per request.
+            document = json.dumps(self.openapi()).encode()
+
+            @self.get(self.openapi_url)
+            async def openapi_json(_request):
+                """OpenAPI schema."""
+                return Response(document, content_type="application/json")
+
+        if self.docs_url and self.openapi_url and ("GET", self.docs_url) not in registered:
+            page = _openapi.DOCS_TEMPLATE.format(
+                title=self.title, openapi_url=self.openapi_url
+            ).encode()
+
+            @self.get(self.docs_url)
+            async def docs(_request):
+                """API documentation."""
+                return Response(page, content_type="text/html; charset=utf-8")
 
     def run(
         self,
@@ -68,7 +111,12 @@ class App:
             f"{mode} Python {sys.version_info.major}.{sys.version_info.minor}",
             flush=True,
         )
+        self._register_docs()
+        specs = [
+            (r.method, r.path, r.target, [p.as_spec() for p in r.params])
+            for r in self.routes
+        ]
         try:
-            Server(host, port, workers, max_concurrency, self._routes).serve()
+            Server(host, port, workers, max_concurrency, specs).serve()
         except KeyboardInterrupt:
             pass

@@ -108,6 +108,11 @@ def main():
         [py, "-c", "import sys;print('gil' if sys._is_gil_enabled() else 'free-threaded')"],
         capture_output=True, text=True, check=True).stdout.strip()
 
+    load_before = os.getloadavg()
+    if load_before[0] > 2.0:
+        print(f"WARNING: 1-minute load average is {load_before[0]:.1f}; results will be "
+              f"depressed.\n", file=sys.stderr)
+
     ns = calibrate(py)
     print(f"build: {build}   load: {args.conns} conns x {args.duration}s")
     print(f"calibration: {ns:.2f} ns per loop iteration\n")
@@ -150,6 +155,7 @@ def main():
     out = ROOT / "bench" / "results" / f"sweep-{'ft' if build != 'gil' else 'gil'}-{time.strftime('%Y%m%d-%H%M%S')}.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps({"build": build, "ns_per_iter": ns,
+                               "loadavg_before": load_before,
                                "crossover_us": crossover, "rows": rows}, indent=2))
     print(f"saved {out.relative_to(ROOT)}")
 

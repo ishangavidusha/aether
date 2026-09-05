@@ -5,8 +5,8 @@ agent-native interfaces. Hobby project, not a product.
 
 **Status: milestone 2 in progress.** Milestone 1 answered how handlers should be
 dispatched. Milestone 2 is building a real router and typed I/O on top of it.
-Routing, typed path parameters, body validation and backpressure work. Query
-parameter binding and OpenAPI do not exist yet. Nothing here is API-stable.
+Routing, typed path and query parameters, pydantic bodies, backpressure and
+OpenAPI 3.1 all work. Nothing here is API-stable.
 
 ## Design decisions so far
 
@@ -25,19 +25,19 @@ parameter binding and OpenAPI do not exist yet. Nothing here is API-stable.
 ```
 src/            Rust crate, built as the `aether._core` extension module
   server.rs     tokio accept loop, hyper HTTP/1.1, enqueue
-  router.rs     per-method radix trees, path params coerced in Rust
+  router.rs     per-method radix trees, path and query params coerced in Rust
   queue.rs      bounded per-worker queue + socketpair wakeup
   worker.rs     one OS thread + one asyncio loop per worker; drain callback
   request.rs    frozen Request pyclass handed to handlers
   responder.rs  one-shot reply channel; JSON is serialized in Rust
-python/aether/  App, decorators, signature validation, pydantic binding, runtime
+python/aether/  App, decorators, signature validation, pydantic, OpenAPI, runtime
 examples/       hello.py
 bench/          baseline apps, hello-world runner, CPU and handler-cost sweeps
-tests/          dispatch, routing, bodies, backpressure, worker detection
+tests/          dispatch, routing, query, bodies, openapi, backpressure, workers
 ```
 
 **Request path.** A tokio thread parses the request, matches it against a radix
-tree per method, coerces any path parameters, and pushes a plain Rust struct onto
+tree per method, coerces its path and query parameters, and pushes a plain Rust struct onto
 the chosen worker's lock-free queue. It never attaches to the interpreter. If no
 wakeup is already in flight it writes a single byte to a socketpair that the
 worker's asyncio loop watches via `add_reader`.
@@ -59,7 +59,7 @@ Requires Rust, `uv`, and `oha` (`brew install oha`) for benchmarks.
 make venvs          # creates .venv (3.14t) and .venv-gil (3.14), installs deps
 make build          # maturin develop --release into both venvs
 make run            # examples/hello.py on the free-threaded build
-make verify         # routing, dispatch correctness, worker detection
+make verify         # all seven test suites
 make bench          # hello-world comparison, free-threaded
 make bench-gil      # hello-world comparison, GIL build
 make bench-cpu      # CPU-bound handler scaling, free-threaded
@@ -107,18 +107,37 @@ DELETE /users/42 ->  405  Allow: GET
 ```
 
 Supported parameter types are `str`, `int`, `float` and `bool`. Anything else is
-a `TypeError` at import time, as is a path parameter the handler does not accept
-or a handler argument that is not in the path. Query parameter binding is not
-implemented yet; read them from `request.query`.
+a `TypeError` at import time, as is a path parameter the handler does not
+accept.
+
+## Query parameters
+
+Any handler argument that is not a path parameter and not a pydantic model is a
+query parameter, coerced in Rust alongside path parameters.
+
+```python
+@app.get("/search")
+async def search(_: Request, q: str, limit: int = 10, cursor: str | None = None):
+    return {"q": q, "limit": limit, "cursor": cursor}
+```
+
+- No default means required. A missing one returns 422 before Python is woken.
+- A default makes it optional, and the handler's own default applies.
+- `str | None` without a default is optional and arrives as `None`.
+
+Booleans accept `true/false`, `1/0`, `yes/no` and `on/off`. A repeated key uses
+the first value; lists are not supported yet. Routes that declare no query
+parameters skip query-string parsing entirely.
 
 A typed path parameter costs nothing measurable:
 
 | target | req/s |
 |---|---:|
-| aether `/` | 193,270 |
-| aether `/users/{user_id}` | 192,723 |
-| granian + fastapi `/users/{user_id}` | 22,845 |
-| uvicorn + fastapi `/users/{user_id}` | 10,778 |
+| aether `/` | 184,861 |
+| aether `/users/{user_id}` | 184,697 |
+| aether `/search?q=..&limit=..` | 181,478 |
+| granian + fastapi query route | 19,478 |
+| uvicorn + fastapi query route | 9,851 |
 
 Routes with no parameters skip the parameter dict entirely, which is why the
 hello-world number did not move when routing landed.
@@ -151,18 +170,50 @@ one format for every 422.
 Validation runs on the worker thread rather than in Rust, which is the one place
 Aether wakes Python before rejecting bad input. It costs about 13%:
 
-| target | req/s |
-|---|---:|
-| aether hello world | 192,684 |
-| aether validated POST | 168,241 |
-| granian + fastapi validated POST | 17,928 |
-| uvicorn + fastapi validated POST | 10,046 |
+| target | req/s | vs aether |
+|---|---:|---:|
+| aether hello world | 184,861 | 1.0x |
+| aether validated POST | 158,031 | 1.2x |
+| granian + fastapi validated POST | 17,023 | 10.9x |
+| uvicorn + fastapi validated POST | 9,948 | 18.6x |
 
 Both sides run the same pydantic version on the same models, so that gap is
 dispatch and serialization, not validation.
 
 Pydantic is a dependency, but Aether imports and runs without it. Only body
 models need it.
+
+## OpenAPI
+
+The schema is generated from the same route metadata the router uses, so it
+cannot describe an endpoint the server would not accept.
+
+```python
+app = App(title="My API", version="1.0.0")
+```
+
+`/openapi.json` and `/docs` are served automatically; pass `openapi_url=None` or
+`docs_url=None` to turn either off. `app.openapi()` returns the document without
+starting a server, which makes it usable for client generation in CI.
+
+Path and query parameters, request and response models, docstring summaries and
+the 422 shape all appear in the document. Nested models are hoisted into
+`components/schemas`. The output is checked against `openapi-spec-validator` in
+the test suite, so "valid OpenAPI 3.1" is verified rather than assumed.
+
+## Explicit responses
+
+Return a `Response` when you need a specific status code or content type.
+
+```python
+from aether import Response
+
+@app.get("/teapot")
+async def teapot(_: Request):
+    return Response(b"short and stout", status=418, content_type="text/plain")
+```
+
+Custom headers are not plumbed through yet.
 
 ## Backpressure
 
@@ -314,6 +365,13 @@ times and all worker loops used.
 make verify
 ```
 
+## Known gaps
+
+- `HEAD` returns 405 everywhere. HTTP requires it wherever `GET` is allowed.
+- No custom response headers, no cookies, no middleware, no auth.
+- Query parameters cannot be lists; a repeated key uses the first value.
+- No `UUID` or date parameter types yet.
+
 ## Open questions
 
 - Does the single-drain-callback design hold up with slow handlers, where one
@@ -322,6 +380,9 @@ make verify
 - The worker cap of 8 is a guard, not a measured limit. The sweep ran on a
   machine with four performance cores, so it cannot say whether scaling
   continues past 8 on a large homogeneous server.
+- Benchmark numbers here were taken at a 1-minute load average of 3.0, decaying
+  from earlier runs, so they sit roughly 4% below a quiet machine. Ratios within
+  the run are unaffected.
 - Where do streams attach? A per-worker loop means an in-memory topic is shared
   across loops in one process, which is the design the free-threading result
   makes possible.

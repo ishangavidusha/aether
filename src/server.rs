@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 
 use crate::queue::Pending;
 use crate::responder::Reply;
-use crate::router::{RouteError, Router};
+use crate::router::{RouteError, Router, SpecTuple};
 use crate::worker::Worker;
 
 struct State {
@@ -36,8 +36,8 @@ pub struct Server {
     routes: Vec<Route>,
 }
 
-/// (method, path, handler, [(param name, param type)])
-type Route = (String, String, Py<PyAny>, Vec<(String, String)>);
+/// (method, path, handler, [(name, type, source, presence)])
+type Route = (String, String, Py<PyAny>, Vec<SpecTuple>);
 
 #[pymethods]
 impl Server {
@@ -64,7 +64,7 @@ impl Server {
         let handlers: Arc<Vec<Py<PyAny>>> =
             Arc::new(self.routes.iter().map(|(_, _, h, _)| h.clone_ref(py)).collect());
 
-        let specs: Vec<(String, String, Vec<(String, String)>)> = self
+        let specs: Vec<(String, String, Vec<SpecTuple>)> = self
             .routes
             .iter()
             .map(|(method, path, _, params)| (method.clone(), path.clone(), params.clone()))
@@ -171,7 +171,10 @@ async fn handle(
     req: hyper::Request<Incoming>,
     state: Arc<State>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    let matched = match state.router.find(req.method().as_str(), req.uri().path()) {
+    let matched = match state
+        .router
+        .find(req.method().as_str(), req.uri().path(), req.uri().query())
+    {
         Ok(matched) => matched,
         Err(RouteError::NotFound) => return Ok(plain(StatusCode::NOT_FOUND, "not found")),
         Err(RouteError::MethodNotAllowed(allow)) => return Ok(method_not_allowed(allow)),

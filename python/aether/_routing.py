@@ -1,20 +1,23 @@
-"""Turning a handler signature into a route spec.
+"""Turning a handler signature into a route.
 
 Path parameters are declared in the path as `{name}`, or `{*name}` to capture
-the rest of the path. Their types come from the handler's annotations, and the
-Rust router coerces them before a worker is ever woken.
+the rest of the path. Any other argument is a query parameter, unless it is
+annotated with a pydantic model, in which case it binds the request body.
 
-A handler argument annotated with a pydantic model binds the request body.
+Types come from the handler's annotations. Path and query parameters are coerced
+by the Rust router before a worker is ever woken; bodies are validated by
+pydantic on the worker thread.
 
 Everything here runs once, at registration. Mistakes surface at import time with
-a message naming the handler, rather than as a confusing 500 on the first
-request.
+a message naming the handler, rather than as a confusing 500 later.
 """
 
 import inspect
 import re
+import types
 import typing
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from ._schema import (
@@ -33,6 +36,38 @@ _PLACEHOLDER = re.compile(r"\{(\*?)([A-Za-z_][A-Za-z0-9_]*)\}")
 # src/router.rs.
 _SUPPORTED: dict[Any, str] = {str: "str", int: "int", float: "float", bool: "bool"}
 
+_EMPTY = inspect.Parameter.empty
+
+
+@dataclass(slots=True)
+class ParamInfo:
+    name: str
+    kind: str
+    source: str  # "path" or "query"
+    presence: str  # "required", "omit" or "null"
+    annotation: Any = str
+    default: Any = None
+    optional: bool = False
+
+    def as_spec(self) -> tuple[str, str, str, str]:
+        """The 4-tuple the Rust router expects."""
+        return (self.name, self.kind, self.source, self.presence)
+
+
+@dataclass(slots=True)
+class RouteInfo:
+    method: str
+    path: str
+    fn: Callable[..., Any]
+    """The function the user wrote, kept for documentation."""
+    target: Callable[..., Any]
+    """What actually runs, which wraps `fn` when there is a body to validate."""
+    params: list[ParamInfo] = field(default_factory=list)
+    body: tuple[str, Any] | None = None
+    response_model: Any = None
+    summary: str = ""
+    description: str = ""
+
 
 def path_params(path: str) -> list[tuple[str, bool]]:
     """(name, is_wildcard) for each placeholder, in path order."""
@@ -46,6 +81,16 @@ def _annotations(fn: Callable[..., Any]) -> dict[str, Any]:
         # A forward reference we cannot resolve should not break registration;
         # unannotated parameters fall back to str.
         return dict(getattr(fn, "__annotations__", {}))
+
+
+def _unwrap_optional(annotation: Any) -> tuple[Any, bool]:
+    """`int | None` -> (int, True). Anything else -> (annotation, False)."""
+    origin = typing.get_origin(annotation)
+    if origin is typing.Union or origin is types.UnionType:
+        args = [a for a in typing.get_args(annotation) if a is not type(None)]
+        if len(args) == 1:
+            return args[0], True
+    return annotation, False
 
 
 def bind_body(fn: Callable[..., Any], name: str, model: Any) -> Callable[..., Any]:
@@ -66,20 +111,14 @@ def bind_body(fn: Callable[..., Any], name: str, model: Any) -> Callable[..., An
     return handler
 
 
-def build_spec(
-    fn: Callable[..., Any], method: str, path: str
-) -> tuple[list[tuple[str, str]], tuple[str, Any] | None]:
-    """Validate the handler against its path.
-
-    Returns the path parameter spec and, if the handler declares one, the name
-    and model of its body argument.
-    """
-    where = f"{method} {path} -> {fn.__qualname__}"
+def build_route(fn: Callable[..., Any], method: str, path: str) -> RouteInfo:
+    where = f"{method} {path} -> {getattr(fn, '__qualname__', fn)}"
 
     if not inspect.iscoroutinefunction(fn):
         raise TypeError(f"{where}: handlers must be `async def`")
 
-    if "{" in _PLACEHOLDER.sub("", path) or "}" in _PLACEHOLDER.sub("", path):
+    stripped = _PLACEHOLDER.sub("", path)
+    if "{" in stripped or "}" in stripped:
         raise ValueError(
             f"{where}: malformed path parameter. Use {{name}} or {{*name}}, "
             f"with a name like a Python identifier"
@@ -98,11 +137,10 @@ def build_spec(
     if not positional:
         raise TypeError(f"{where}: handler must accept the request as its first argument")
 
-    accepted = positional[1:]
-    accepted_names = {p.name for p in accepted}
+    accepted = {p.name: p for p in positional[1:]}
     hints = _annotations(fn)
 
-    missing = [n for n in names if n not in accepted_names]
+    missing = [n for n in names if n not in accepted]
     if missing:
         raise TypeError(
             f"{where}: path declares {', '.join(repr(n) for n in missing)} "
@@ -110,31 +148,7 @@ def build_spec(
             f"{'them' if len(missing) > 1 else 'it'}"
         )
 
-    # Anything not in the path must be a pydantic model, which becomes the body.
-    body: tuple[str, Any] | None = None
-    leftover = [p for p in accepted if p.name not in set(names)]
-    for param in leftover:
-        annotation = hints.get(param.name)
-        if is_model(annotation):
-            if body is not None:
-                raise TypeError(
-                    f"{where}: handler declares two body models, "
-                    f"{body[0]!r} and {param.name!r}. Only one is allowed"
-                )
-            body = (param.name, annotation)
-            continue
-        hint = (
-            "install pydantic and annotate it with a BaseModel to bind the request body"
-            if not HAVE_PYDANTIC
-            else "annotate it with a pydantic BaseModel to bind the request body, "
-            "or read query parameters from `request.query`"
-        )
-        raise TypeError(
-            f"{where}: handler accepts {param.name!r}, which is not a path "
-            f"parameter. Query parameter binding is not implemented yet; {hint}"
-        )
-
-    spec: list[tuple[str, str]] = []
+    params: list[ParamInfo] = []
     for name, is_wildcard in declared:
         annotation = hints.get(name, str)
         if is_wildcard and annotation is not str:
@@ -144,11 +158,87 @@ def build_spec(
             )
         kind = _SUPPORTED.get(annotation)
         if kind is None:
-            supported = ", ".join(t.__name__ for t in _SUPPORTED)
             raise TypeError(
                 f"{where}: path parameter {name!r} is annotated "
                 f"{getattr(annotation, '__name__', annotation)!r}, which is not "
-                f"supported. Use one of: {supported}"
+                f"supported. Use one of: {', '.join(t.__name__ for t in _SUPPORTED)}"
             )
-        spec.append((name, kind))
-    return spec, body
+        params.append(
+            ParamInfo(name, kind, "path", "required", annotation=annotation)
+        )
+
+    # Anything left is a query parameter, or the body if it is a pydantic model.
+    body: tuple[str, Any] | None = None
+    for name, param in accepted.items():
+        if name in set(names):
+            continue
+        annotation = hints.get(name, _EMPTY)
+
+        if is_model(annotation):
+            if body is not None:
+                raise TypeError(
+                    f"{where}: handler declares two body models, "
+                    f"{body[0]!r} and {name!r}. Only one is allowed"
+                )
+            body = (name, annotation)
+            continue
+
+        if annotation is _EMPTY:
+            raise TypeError(
+                f"{where}: query parameter {name!r} needs a type annotation. "
+                f"Use one of: {', '.join(t.__name__ for t in _SUPPORTED)}"
+            )
+
+        base, optional = _unwrap_optional(annotation)
+        kind = _SUPPORTED.get(base)
+        if kind is None:
+            extra = (
+                ", or a pydantic BaseModel to bind the request body"
+                if HAVE_PYDANTIC
+                else ""
+            )
+            raise TypeError(
+                f"{where}: {name!r} is annotated "
+                f"{getattr(base, '__name__', base)!r}, which is not supported as a "
+                f"query parameter. Use one of: "
+                f"{', '.join(t.__name__ for t in _SUPPORTED)}{extra}"
+            )
+
+        if param.default is not _EMPTY:
+            # Leave it out of the kwargs and let Python apply the default.
+            presence = "omit"
+        elif optional:
+            presence = "null"
+        else:
+            presence = "required"
+
+        params.append(
+            ParamInfo(
+                name,
+                kind,
+                "query",
+                presence,
+                annotation=base,
+                default=None if param.default is _EMPTY else param.default,
+                optional=optional,
+            )
+        )
+
+    response_model = hints.get("return")
+    if not is_model(response_model):
+        response_model = None
+
+    doc = inspect.getdoc(fn) or ""
+    summary, _, description = doc.partition("\n\n")
+
+    return RouteInfo(
+        method=method,
+        path=path,
+        fn=fn,
+        target=fn if body is None else bind_body(fn, *body),
+        params=params,
+        body=body,
+        response_model=response_model,
+        summary=summary.strip().replace("\n", " "),
+        description=description.strip(),
+    )

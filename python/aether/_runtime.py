@@ -8,6 +8,7 @@ parameters already coerced to Python objects.
 
 import asyncio
 
+from ._response import Response
 from ._schema import RequestValidationError, is_model_instance, to_json
 
 
@@ -32,7 +33,9 @@ async def run_handler(handler, request, responder, params):
         responder.send(500, "text/plain; charset=utf-8", f"{type(exc).__name__}: {exc}".encode())
         return
 
-    if result is None:
+    if isinstance(result, Response):
+        responder.send(result.status, result.content_type, result.encoded())
+    elif result is None:
         responder.send(204, "text/plain", b"")
     elif is_model_instance(result):
         # pydantic serializes straight to bytes, so this skips both a Python

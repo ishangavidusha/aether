@@ -63,6 +63,9 @@ impl Drainer {
                         ParamValue::Int(v) => dict.set_item(&param.name, v)?,
                         ParamValue::Float(v) => dict.set_item(&param.name, v)?,
                         ParamValue::Bool(v) => dict.set_item(&param.name, v)?,
+                        ParamValue::Null => dict.set_item(&param.name, py.None())?,
+                        // Left out on purpose: the handler's own default applies.
+                        ParamValue::Omit => {}
                     }
                 }
                 Some(dict)

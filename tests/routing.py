@@ -104,11 +104,11 @@ def registration_checks() -> list[str]:
         async def h(_: Request):
             return {}
 
-    def extra_param():
+    def unannotated_extra():
         bad = App()
 
         @bad.get("/a")
-        async def h(_: Request, x: int):
+        async def h(_: Request, x):
             return {}
 
     def unsupported_type():
@@ -140,11 +140,26 @@ def registration_checks() -> list[str]:
             return {}
 
     expect_error("path param missing from handler", TypeError, missing_param)
-    expect_error("handler param not in path", TypeError, extra_param)
+    expect_error("unannotated extra argument", TypeError, unannotated_extra)
     expect_error("unsupported param type", TypeError, unsupported_type)
     expect_error("sync handler", TypeError, sync_handler)
     expect_error("handler with no request arg", TypeError, no_request_arg)
     expect_error("typed wildcard", TypeError, typed_wildcard)
+
+    # An annotated argument outside the path is a query parameter, not an error.
+    # This changed when query binding landed; see tests/query.py for coverage.
+    try:
+        ok = App()
+
+        @ok.get("/a")
+        async def h(_: Request, x: int = 1):
+            return {}
+
+        param = ok.routes[0].params[0]
+        if (param.name, param.source) != ("x", "query"):
+            failures.append(f"extra argument became {param.source} {param.name!r}")
+    except Exception as e:
+        failures.append(f"annotated extra argument rejected: {type(e).__name__}: {e}")
     return failures
 
 

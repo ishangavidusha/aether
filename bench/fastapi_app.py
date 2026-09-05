@@ -30,3 +30,8 @@ class UserOut(BaseModel):
 @app.post("/users", response_model=UserOut)
 async def create_user(body: UserIn):
     return UserOut(id=1, name=body.name, age=body.age)
+
+
+@app.get("/search")
+async def search(q: str, limit: int = 10):
+    return {"q": q, "limit": limit}

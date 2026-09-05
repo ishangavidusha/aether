@@ -35,6 +35,11 @@ async def create_user(_: Request, body: UserIn):
     return UserOut(id=1, name=body.name, age=body.age)
 
 
+@app.get("/search")
+async def search(_: Request, q: str, limit: int = 10):
+    return {"q": q, "limit": limit}
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--port", type=int, default=8000)
