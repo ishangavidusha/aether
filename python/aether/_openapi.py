@@ -129,6 +129,10 @@ def build(
     paths: dict[str, Any] = {}
 
     for route in routes:
+        # OpenAPI 3.1 has no vocabulary for WebSocket endpoints, so they are
+        # left out rather than described as ordinary GETs.
+        if route.websocket:
+            continue
         entry = paths.setdefault(_openapi_path(route.path), {})
         entry[route.method.lower()] = _operation(route, components)
 

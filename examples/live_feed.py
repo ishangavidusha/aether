@@ -1,5 +1,8 @@
 """A live feed: one publish reaches every subscriber, on every worker loop.
 
+The same topic is served over both Server-Sent Events and a WebSocket, which is
+the point of keeping transports separate from the stream itself.
+
 This is the point of building on free-threaded Python. The server runs several
 event loops in one process, browsers connect to whichever loop happens to take
 their request, and a message published through any of them fans out to all of
@@ -46,6 +49,19 @@ async def events(_: Request):
     return SSE(app.topic(FEED).subscribe(maxsize=64))
 
 
+@app.websocket("/ws")
+async def ws_feed(_: Request, ws):
+    """The same feed over a WebSocket.
+
+    Note what is *not* here: no check for whether the browser is still
+    connected. When the socket closes, Aether cancels this handler, the `async
+    with` unwinds, and the subscription is released.
+    """
+    async with app.topic(FEED).subscribe(maxsize=64) as sub:
+        async for message in sub:
+            await ws.send(message.data)
+
+
 @app.get("/stats")
 async def stats(_: Request):
     return {"listeners": app.topic(FEED).subscribers}
@@ -72,6 +88,8 @@ PAGE = """<!doctype html>
  input{flex:1;padding:.4rem} button{padding:.4rem .8rem}
 </style>
 <h1>Live feed <small id="n"></small></h1>
+<p><a href="#" onclick="location.hash='';location.reload()">SSE</a> ·
+   <a href="#ws" onclick="setTimeout(()=>location.reload())">WebSocket</a></p>
 <form onsubmit="send(event)">
   <input id="who" placeholder="name" value="anon" size="8">
   <input id="text" placeholder="say something" autofocus>
@@ -80,7 +98,15 @@ PAGE = """<!doctype html>
 <ul id="log"></ul>
 <script>
 const log = document.getElementById("log");
-new EventSource("/events").addEventListener("message", e => {
+const feed = location.hash === "#ws"
+  ? wsFeed() : new EventSource("/events");
+function wsFeed() {
+  const s = new WebSocket(`ws://${location.host}/ws`);
+  s.addEventListener("message", e =>
+    feed.dispatchEvent(new MessageEvent("message", {data: e.data})));
+  return s;
+}
+feed.addEventListener("message", e => {
   const m = JSON.parse(e.data), li = document.createElement("li");
   li.innerHTML = `<span class="who"></span> <span></span> <span class="at"></span>`;
   li.children[0].textContent = m.who + ":";

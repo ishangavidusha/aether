@@ -10,9 +10,11 @@ from ._core import Request
 from ._response import Response
 from ._sse import SSE, Event
 from ._streams import BLOCK, DROP_NEWEST, DROP_OLDEST, ERROR, Subscription, Topic, TopicFull
+from ._websocket import WebSocket, WebSocketClosed
 
 __all__ = [
     "App", "Request", "Response", "SSE", "Event",
     "Topic", "Subscription", "TopicFull",
+    "WebSocket", "WebSocketClosed",
     "BLOCK", "DROP_NEWEST", "DROP_OLDEST", "ERROR",
 ]

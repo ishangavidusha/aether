@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 
 use crate::responder::Reply;
 use crate::router::ParamValue;
+use crate::websocket::Shared;
 
 /// One request waiting for a Python worker. No Python objects: the handler is
 /// referenced by index into the shared route table.
@@ -31,6 +32,9 @@ pub struct Pending {
     pub query: Option<String>,
     pub body: Vec<u8>,
     pub reply: oneshot::Sender<Reply>,
+    /// Set for an upgraded connection. The handler gets a socket instead of
+    /// producing a reply, since the 101 has already gone out.
+    pub websocket: Option<std::sync::Arc<Shared>>,
 }
 
 pub struct WorkerQueue {

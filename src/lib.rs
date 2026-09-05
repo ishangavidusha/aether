@@ -13,6 +13,7 @@ mod request;
 mod responder;
 mod router;
 mod server;
+mod websocket;
 mod worker;
 
 use pyo3::prelude::*;
@@ -24,5 +25,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<request::Request>()?;
     m.add_class::<responder::Responder>()?;
     m.add_class::<server::Server>()?;
+    m.add_class::<websocket::WebSocket>()?;
     Ok(())
 }

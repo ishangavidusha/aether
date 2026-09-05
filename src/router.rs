@@ -110,6 +110,8 @@ pub struct RouteSpec {
     pub params: Vec<ParamSpec>,
     /// Skip query-string parsing entirely for routes that declare none.
     has_query: bool,
+    /// Handled by the upgrade path rather than the ordinary reply path.
+    pub websocket: bool,
 }
 
 /// A parameter that was missing or would not coerce. Rendered in the shape
@@ -154,6 +156,9 @@ pub struct Matched {
 /// (name, type, source, presence), all as strings from the Python side.
 pub type SpecTuple = (String, String, String, String);
 
+/// (method, path, params, is_websocket)
+pub type RouteTuple = (String, String, Vec<SpecTuple>, bool);
+
 pub struct Router {
     by_method: HashMap<String, Matcher<usize>>,
     specs: Vec<RouteSpec>,
@@ -161,14 +166,15 @@ pub struct Router {
 }
 
 impl Router {
-    pub fn build(routes: &[(String, String, Vec<SpecTuple>)]) -> Result<Self, String> {
+    pub fn build(routes: &[RouteTuple]) -> Result<Self, String> {
         let mut by_method: HashMap<String, Matcher<usize>> = HashMap::new();
         let mut specs = Vec::with_capacity(routes.len());
 
-        for (index, (method, path, params)) in routes.iter().enumerate() {
+        for (index, (method, path, params, websocket)) in routes.iter().enumerate() {
             let mut spec = RouteSpec {
                 params: Vec::new(),
                 has_query: false,
+                websocket: *websocket,
             };
             for (name, kind, source, presence) in params {
                 let kind = ParamKind::parse(kind)

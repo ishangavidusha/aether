@@ -3,10 +3,9 @@
 A fast Python REST framework with a Rust core, built-in reactive streams, and
 agent-native interfaces. Hobby project, not a product.
 
-**Status: milestone 3 in progress.** Routing, typed path and query parameters,
-pydantic bodies, backpressure and OpenAPI 3.1 all work. Streams work over
-Server-Sent Events; WebSocket is the remaining half of this milestone. Nothing
-here is API-stable.
+**Status: milestone 3 complete.** Routing, typed path and query parameters,
+pydantic bodies, backpressure, OpenAPI 3.1, in-process topics, Server-Sent
+Events and WebSocket all work. Nothing here is API-stable.
 
 ## Design decisions so far
 
@@ -28,10 +27,11 @@ src/            Rust crate, built as the `aether._core` extension module
   router.rs     per-method radix trees, path and query params coerced in Rust
   queue.rs      bounded per-worker queue + socketpair wakeup
   responder.rs  reply channel, streaming bodies, disconnect signal
+  websocket.rs  upgrade bridge over tokio-tungstenite
   worker.rs     one OS thread + one asyncio loop per worker; drain callback
   request.rs    frozen Request pyclass handed to handlers
   responder.rs  one-shot reply channel; JSON is serialized in Rust
-python/aether/  App, routing, pydantic, OpenAPI, topics, SSE, worker runtime
+python/aether/  App, routing, pydantic, OpenAPI, topics, SSE, sockets, runtime
 examples/       hello.py
 bench/          baseline apps, hello-world runner, CPU and handler-cost sweeps
 tests/          dispatch, routing, query, bodies, openapi, streams, sse, ...
@@ -265,8 +265,43 @@ guard that hyper drops when the connection ends, and the pump races that against
 the next message. Without it a stream waiting on a quiet topic would never
 notice its client had left, leaking the subscription indefinitely.
 
-`examples/live_feed.py` is a working chat page: open it in several tabs and post
-a message.
+## WebSocket
+
+```python
+@app.websocket("/ws")
+async def echo(request, ws):
+    async for message in ws:
+        await ws.send(message)
+```
+
+Aether does the handshake, so the socket is already open when the handler runs.
+Text arrives as `str` and binary as `bytes`. Sending follows the value rather
+than its class: `str` goes as text, `bytes` as binary, and everything else,
+dicts and pydantic models alike, as JSON in a text frame. Ping and Pong are
+answered underneath and never reach the handler. Path and query parameters work
+exactly as they do on an ordinary route.
+
+**A handler is cancelled when its peer disconnects.** That matters for the
+pattern this framework is built around:
+
+```python
+@app.websocket("/feed")
+async def feed(request, ws):
+    async with app.topic("orders").subscribe() as sub:
+        async for order in sub:
+            await ws.send(order)
+```
+
+That handler is blocked on the topic, not the socket, so it has no way to notice
+the browser closed. Cancelling unwinds the `async with`, which releases the
+subscription. Without it, every closed tab would leak a subscription until the
+next message happened to arrive.
+
+A plain `GET` to a socket route returns 426. Socket routes are left out of the
+OpenAPI document, since OpenAPI 3.1 has no vocabulary for them.
+
+`examples/live_feed.py` is a working chat page serving the same topic over both
+transports: open it in several tabs and post a message.
 
 ## Explicit responses
 
@@ -439,7 +474,8 @@ make verify
 ## Known gaps
 
 - `HEAD` returns 405 everywhere. HTTP requires it wherever `GET` is allowed.
-- No WebSocket yet; the other half of milestone 3.
+- A WebSocket cannot be rejected after inspection; the handshake completes
+  before the handler runs. Needs a pre-accept hook.
 - No cookies, no middleware, no auth.
 - Topics are in-memory only. Durability and cross-machine fan-out via Redis
   Streams is milestone 4.

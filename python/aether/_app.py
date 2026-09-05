@@ -56,6 +56,25 @@ class App:
     def delete(self, path: str):
         return self.route("DELETE", path)
 
+    def websocket(self, path: str):
+        """Register a WebSocket endpoint.
+
+        The handler takes the request and the socket. Aether performs the
+        handshake, so the socket is already open when the handler runs, and the
+        connection closes when it returns.
+
+            @app.websocket("/ws")
+            async def echo(request, ws):
+                async for message in ws:
+                    await ws.send(message)
+        """
+
+        def decorator(fn):
+            self.routes.append(build_route(fn, "GET", path, websocket=True))
+            return fn
+
+        return decorator
+
     def topic(
         self, name: str, maxsize: int | None = None, policy: str | None = None
     ) -> Topic:
@@ -136,7 +155,7 @@ class App:
         )
         self._register_docs()
         specs = [
-            (r.method, r.path, r.target, [p.as_spec() for p in r.params])
+            (r.method, r.path, r.target, [p.as_spec() for p in r.params], r.websocket)
             for r in self.routes
         ]
         try:

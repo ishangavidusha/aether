@@ -67,6 +67,7 @@ class RouteInfo:
     response_model: Any = None
     summary: str = ""
     description: str = ""
+    websocket: bool = False
 
 
 def path_params(path: str) -> list[tuple[str, bool]]:
@@ -111,8 +112,10 @@ def bind_body(fn: Callable[..., Any], name: str, model: Any) -> Callable[..., An
     return handler
 
 
-def build_route(fn: Callable[..., Any], method: str, path: str) -> RouteInfo:
-    where = f"{method} {path} -> {getattr(fn, '__qualname__', fn)}"
+def build_route(
+    fn: Callable[..., Any], method: str, path: str, websocket: bool = False
+) -> RouteInfo:
+    where = f"{'WEBSOCKET' if websocket else method} {path} -> {getattr(fn, '__qualname__', fn)}"
 
     if not inspect.iscoroutinefunction(fn):
         raise TypeError(f"{where}: handlers must be `async def`")
@@ -137,7 +140,15 @@ def build_route(fn: Callable[..., Any], method: str, path: str) -> RouteInfo:
     if not positional:
         raise TypeError(f"{where}: handler must accept the request as its first argument")
 
-    accepted = {p.name: p for p in positional[1:]}
+    if websocket:
+        if len(positional) < 2:
+            raise TypeError(
+                f"{where}: a websocket handler takes the request and the socket, "
+                f"as `async def {getattr(fn, '__name__', 'handler')}(request, ws, ...)`"
+            )
+        accepted = {p.name: p for p in positional[2:]}
+    else:
+        accepted = {p.name: p for p in positional[1:]}
     hints = _annotations(fn)
 
     missing = [n for n in names if n not in accepted]
@@ -175,6 +186,11 @@ def build_route(fn: Callable[..., Any], method: str, path: str) -> RouteInfo:
         annotation = hints.get(name, _EMPTY)
 
         if is_model(annotation):
+            if websocket:
+                raise TypeError(
+                    f"{where}: a websocket handler has no request body; "
+                    f"read messages from the socket instead"
+                )
             if body is not None:
                 raise TypeError(
                     f"{where}: handler declares two body models, "
@@ -241,4 +257,5 @@ def build_route(fn: Callable[..., Any], method: str, path: str) -> RouteInfo:
         response_model=response_model,
         summary=summary.strip().replace("\n", " "),
         description=description.strip(),
+        websocket=websocket,
     )

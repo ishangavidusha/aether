@@ -11,7 +11,7 @@ dependencies = ["pydantic>=2.9"]
 
 [project.optional-dependencies]
 bench = ["uvicorn", "granian", "fastapi"]
-test = ["httpx", "openapi-spec-validator"]
+test = ["httpx", "openapi-spec-validator", "websockets"]
 
 [tool.maturin]
 python-source = "python"

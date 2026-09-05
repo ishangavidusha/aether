@@ -7,7 +7,10 @@ use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
-use hyper::header::{ALLOW, CONTENT_TYPE, RETRY_AFTER};
+use hyper::header::{
+    ALLOW, CONNECTION, CONTENT_TYPE, RETRY_AFTER, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY,
+    SEC_WEBSOCKET_VERSION, UPGRADE,
+};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Response, StatusCode};
@@ -21,7 +24,8 @@ use tokio_stream::StreamExt;
 
 use crate::queue::Pending;
 use crate::responder::{Body, Reply};
-use crate::router::{RouteError, Router, SpecTuple};
+use crate::router::{RouteError, RouteTuple, Router, SpecTuple};
+use crate::websocket;
 use crate::worker::Worker;
 
 struct State {
@@ -39,8 +43,8 @@ pub struct Server {
     routes: Vec<Route>,
 }
 
-/// (method, path, handler, [(name, type, source, presence)])
-type Route = (String, String, Py<PyAny>, Vec<SpecTuple>);
+/// (method, path, handler, [(name, type, source, presence)], is_websocket)
+type Route = (String, String, Py<PyAny>, Vec<SpecTuple>, bool);
 
 #[pymethods]
 impl Server {
@@ -64,13 +68,19 @@ impl Server {
     /// Start workers, bind, and serve until Ctrl-C. Blocks the calling thread
     /// but detaches from the interpreter for the duration.
     fn serve(&self, py: Python<'_>) -> PyResult<()> {
-        let handlers: Arc<Vec<Py<PyAny>>> =
-            Arc::new(self.routes.iter().map(|(_, _, h, _)| h.clone_ref(py)).collect());
+        let handlers: Arc<Vec<Py<PyAny>>> = Arc::new(
+            self.routes
+                .iter()
+                .map(|(_, _, handler, _, _)| handler.clone_ref(py))
+                .collect(),
+        );
 
-        let specs: Vec<(String, String, Vec<SpecTuple>)> = self
+        let specs: Vec<RouteTuple> = self
             .routes
             .iter()
-            .map(|(method, path, _, params)| (method.clone(), path.clone(), params.clone()))
+            .map(|(method, path, _, params, websocket)| {
+                (method.clone(), path.clone(), params.clone(), *websocket)
+            })
             .collect();
         let router = Arc::new(Router::build(&specs).map_err(PyValueError::new_err)?);
 
@@ -130,7 +140,12 @@ async fn serve_loop(addr: SocketAddr, state: Arc<State>) -> Result<(), String> {
                 tokio::spawn(async move {
                     let io = TokioIo::new(stream);
                     let svc = service_fn(move |req| handle(req, state.clone()));
-                    let _ = http1::Builder::new().serve_connection(io, svc).await;
+                    // `with_upgrades` is required for 101 responses to hand
+                    // the connection over instead of closing it.
+                    let _ = http1::Builder::new()
+                        .serve_connection(io, svc)
+                        .with_upgrades()
+                        .await;
                 });
             }
             _ = tokio::signal::ctrl_c() => break,
@@ -181,6 +196,105 @@ fn method_not_allowed(allow: String) -> Response<Out> {
         .unwrap()
 }
 
+/// Find a worker with room and hand it the request. False means every worker
+/// is at its limit.
+fn enqueue(state: &State, pending: Pending) -> bool {
+    let mut pending = pending;
+    let start = state.next_worker.fetch_add(1, Ordering::Relaxed);
+    let count = state.workers.len();
+    for offset in 0..count {
+        let idx = (start + offset) % count;
+        match state.workers[idx].queue.try_push(pending) {
+            Ok(()) => return true,
+            Err(returned) => pending = returned,
+        }
+    }
+    false
+}
+
+/// Complete a WebSocket handshake and hand the socket to a handler.
+///
+/// The 101 goes out from here rather than from the handler, because hyper only
+/// yields the upgraded connection after the response has been written.
+async fn upgrade_websocket(
+    mut req: hyper::Request<Incoming>,
+    matched: crate::router::Matched,
+    state: Arc<State>,
+) -> Response<Out> {
+    let headers = req.headers();
+    let upgrading = headers
+        .get(UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+        && headers
+            .get(CONNECTION)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.to_ascii_lowercase().contains("upgrade"));
+
+    let version_ok = headers
+        .get(SEC_WEBSOCKET_VERSION)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.trim() == "13");
+
+    let key = headers.get(SEC_WEBSOCKET_KEY).cloned();
+
+    let (Some(key), true, true) = (key, upgrading, version_ok) else {
+        // A plain GET to a socket route is a client mistake worth naming.
+        return Response::builder()
+            .status(StatusCode::UPGRADE_REQUIRED)
+            .header(CONTENT_TYPE, "text/plain")
+            .header(SEC_WEBSOCKET_VERSION, "13")
+            .body(full(Bytes::from_static(
+                b"this endpoint speaks websocket; send an Upgrade request",
+            )))
+            .unwrap();
+    };
+
+    let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes());
+    let (shared, outgoing) = websocket::Shared::new();
+
+    // The reply channel goes nowhere: the response is built here, and the
+    // Responder exists only so the in-flight count is released on drop.
+    let (reply_tx, reply_rx) = oneshot::channel();
+    drop(reply_rx);
+
+    let queued = enqueue(
+        &state,
+        Pending {
+            route: matched.route,
+            params: matched.params,
+            method: req.method().as_str().to_owned(),
+            path: req.uri().path().to_owned(),
+            query: req.uri().query().map(str::to_owned),
+            body: Vec::new(),
+            reply: reply_tx,
+            websocket: Some(shared.clone()),
+        },
+    );
+    if !queued {
+        return overloaded();
+    }
+
+    let upgrade = hyper::upgrade::on(&mut req);
+    tokio::spawn(async move {
+        match upgrade.await {
+            Ok(upgraded) => {
+                websocket::serve(TokioIo::new(upgraded), shared, outgoing).await;
+            }
+            // The handler is already running; tell it the socket never opened.
+            Err(_) => shared.mark_closed(),
+        }
+    });
+
+    Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header(UPGRADE, "websocket")
+        .header(CONNECTION, "Upgrade")
+        .header(SEC_WEBSOCKET_ACCEPT, accept)
+        .body(full(Bytes::new()))
+        .unwrap()
+}
+
 async fn handle(
     req: hyper::Request<Incoming>,
     state: Arc<State>,
@@ -198,6 +312,10 @@ async fn handle(
         }
     };
 
+    if state.router.spec(matched.route).websocket {
+        return Ok(upgrade_websocket(req, matched, state).await);
+    }
+
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
@@ -206,7 +324,7 @@ async fn handle(
     };
 
     let (reply_tx, reply_rx) = oneshot::channel::<Reply>();
-    let mut pending = Pending {
+    let pending = Pending {
         route: matched.route,
         params: matched.params,
         method,
@@ -214,28 +332,14 @@ async fn handle(
         query,
         body: collected.to_bytes().to_vec(),
         reply: reply_tx,
+        websocket: None,
     };
 
     // No Python involvement on this thread: plain Rust data plus one byte
-    // written to the worker's wake socket. Start round-robin, but fall through
-    // to any worker with room, so one slow handler cannot stall its share of
-    // traffic while other loops sit idle.
-    let start = state.next_worker.fetch_add(1, Ordering::Relaxed);
-    let count = state.workers.len();
-    let mut queued = false;
-    for offset in 0..count {
-        let idx = (start + offset) % count;
-        match state.workers[idx].queue.try_push(pending) {
-            Ok(()) => {
-                queued = true;
-                break;
-            }
-            Err(returned) => pending = returned,
-        }
-    }
-    if !queued {
-        // Every queue is full. Shed the request now rather than let it wait
-        // behind work the server has already failed to keep up with.
+    // written to the worker's wake socket.
+    if !enqueue(&state, pending) {
+        // Every worker is at its limit. Shed the request now rather than let it
+        // wait behind work the server has already failed to keep up with.
         return Ok(overloaded());
     }
 

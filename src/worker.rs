@@ -12,6 +12,7 @@ use crate::queue::WorkerQueue;
 use crate::request::Request;
 use crate::responder::Responder;
 use crate::router::{ParamValue, Router};
+use crate::websocket::WebSocket;
 
 /// Callable handed to `loop.add_reader`. asyncio invokes it on the worker's own
 /// thread whenever the wake socket becomes readable, and it drains every queued
@@ -23,6 +24,8 @@ struct Drainer {
     router: Arc<Router>,
     /// `aether._runtime.run_handler`, an async function.
     run_handler: Py<PyAny>,
+    /// `aether._runtime.run_websocket`, for upgraded connections.
+    run_websocket: Py<PyAny>,
     /// Bound `loop.create_task`.
     create_task: Py<PyAny>,
     /// Read end of the wake socketpair.
@@ -86,7 +89,15 @@ impl Drainer {
                 py,
                 Responder::new(item.reply, self.queue.clone(), self.runtime.clone()),
             )?;
-            let coro = run_handler.call1((handler, request, responder, params))?;
+            let coro = match item.websocket {
+                Some(shared) => {
+                    let socket = Py::new(py, WebSocket::new(shared))?;
+                    self.run_websocket
+                        .bind(py)
+                        .call1((handler, request, responder, socket, params))?
+                }
+                None => run_handler.call1((handler, request, responder, params))?,
+            };
             create_task.call1((coro,))?;
         }
 
@@ -131,6 +142,7 @@ impl Worker {
                             routes,
                             router,
                             run_handler: runtime.getattr("run_handler")?.unbind(),
+                            run_websocket: runtime.getattr("run_websocket")?.unbind(),
                             create_task: event_loop.getattr("create_task")?.unbind(),
                             reader: read_end,
                             runtime: tokio_handle,

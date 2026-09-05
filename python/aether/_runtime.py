@@ -11,6 +11,48 @@ import asyncio
 from ._response import Response
 from ._schema import RequestValidationError, is_model_instance, to_json
 from ._sse import CLOSED, SSE, SSE_HEADERS, format_event
+from ._websocket import WebSocket
+
+
+async def run_websocket(handler, request, responder, core, params):
+    """Run one WebSocket handler.
+
+    `responder` is never used to send a reply here; the 101 already went out
+    from the accept path. It is held only so the worker's in-flight count is
+    released when this task ends, exactly as it is for an ordinary request.
+    """
+    loop = asyncio.get_running_loop()
+    socket = WebSocket(core)
+    gone = loop.create_future()
+
+    def _peer_left():
+        if not gone.done():
+            gone.set_result(None)
+
+    core.on_close(loop, _peer_left)
+
+    if params is None:
+        task = asyncio.ensure_future(handler(request, socket))
+    else:
+        task = asyncio.ensure_future(handler(request, socket, **params))
+
+    try:
+        # Racing the handler against the close is what lets the common pattern
+        # work: a handler blocked on `async for item in topic.subscribe()` has
+        # no reason to notice its peer left, and would otherwise hold that
+        # subscription and its in-flight slot forever.
+        done, _ = await asyncio.wait({task, gone}, return_when=asyncio.FIRST_COMPLETED)
+        if task not in done:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        else:
+            exc = task.exception()
+            if exc is not None:
+                import traceback
+
+                traceback.print_exception(exc)
+    finally:
+        core.close()
 
 
 async def pump_sse(sse, responder):
