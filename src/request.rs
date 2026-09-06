@@ -14,6 +14,22 @@ pub struct Request {
 
 #[pymethods]
 impl Request {
+    /// Build one from Python.
+    ///
+    /// Needed because a capability invoked over MCP never came in over HTTP,
+    /// but the handler it calls still expects a request. Also what a test
+    /// client would use.
+    #[new]
+    #[pyo3(signature = (method = "GET".to_string(), path = "/".to_string(), query = None, body = None))]
+    fn py_new(method: String, path: String, query: Option<String>, body: Option<Vec<u8>>) -> Self {
+        Self {
+            method,
+            path,
+            query,
+            body: body.unwrap_or_default(),
+        }
+    }
+
     #[getter]
     fn method(&self) -> &str {
         &self.method

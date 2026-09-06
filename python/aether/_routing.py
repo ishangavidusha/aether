@@ -68,6 +68,8 @@ class RouteInfo:
     summary: str = ""
     description: str = ""
     websocket: bool = False
+    tool: bool = False
+    """Exposed to agents over MCP. Opt-in, never the default."""
 
 
 def path_params(path: str) -> list[tuple[str, bool]]:
@@ -113,7 +115,11 @@ def bind_body(fn: Callable[..., Any], name: str, model: Any) -> Callable[..., An
 
 
 def build_route(
-    fn: Callable[..., Any], method: str, path: str, websocket: bool = False
+    fn: Callable[..., Any],
+    method: str,
+    path: str,
+    websocket: bool = False,
+    tool: bool = False,
 ) -> RouteInfo:
     where = f"{'WEBSOCKET' if websocket else method} {path} -> {getattr(fn, '__qualname__', fn)}"
 
@@ -258,4 +264,5 @@ def build_route(
         summary=summary.strip().replace("\n", " "),
         description=description.strip(),
         websocket=websocket,
+        tool=tool,
     )

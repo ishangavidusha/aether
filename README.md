@@ -3,7 +3,7 @@
 A fast Python REST framework with a Rust core, built-in reactive streams, and
 agent-native interfaces. Hobby project, not a product.
 
-**Status: milestones 1-4 complete.** Routing, typed path and query parameters,
+**Status: milestones 1-5 complete.** Routing, typed path and query parameters,
 pydantic bodies, backpressure, OpenAPI 3.1, in-process topics, Server-Sent
 Events and WebSocket all work. Nothing here is API-stable.
 
@@ -249,6 +249,45 @@ Topics are plain Python, not Rust. Both ends are already Python, so a Rust
 buffer would add a foreign-function crossing on emit and on receive to replace a
 deque operation cheaper than either crossing. Waking a subscriber costs anything
 at all only when it is idle, so a busy stream coalesces naturally.
+
+## Agents
+
+The same handler that serves HTTP can be a capability an agent calls, over the
+Model Context Protocol. Nothing is declared twice: the tool's name, description,
+argument schema and output schema all come from the handler that already exists.
+
+```python
+@app.get("/notes/{note_id}", tool=True)
+async def read_note(_: Request, note_id: int) -> Note:
+    """Read one note by its id."""
+    return Note(**NOTES[note_id])
+```
+
+Point an MCP client at `/mcp` and it sees `read_note` with a typed `note_id`
+argument, that docstring as its description, `Note` as its output schema, and a
+read-only hint inferred from the fact that it is a GET.
+
+**`tool=True` is opt-in on purpose.** A route without it is still a perfectly
+good endpoint; it simply is not offered to agents. Every route being
+agent-callable by default would mean an administrative delete endpoint is
+agent-callable by default.
+
+Body fields are flattened into the argument list, so an agent calls
+`write_note(title=..., body=...)` rather than nesting an object whose shape it
+has to infer. A body field that collides with a path or query parameter is an
+error at import time.
+
+Topics show up as readable resources at `topic://<name>`; a durable one returns
+recent messages.
+
+The transport is the simple half of the spec: a POST carrying one JSON-RPC
+message, answered with JSON. Streaming responses and the server-to-client GET
+channel are not implemented, and the router returns 405 for them, which is what
+the spec asks. `tests/capabilities.py` drives the official MCP SDK client
+against a running server.
+
+`examples/agent_service.py` serves one set of declarations to curl, to an
+OpenAPI client and to an agent.
 
 ## Durable topics
 

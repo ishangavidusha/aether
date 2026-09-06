@@ -7,8 +7,8 @@ GIL_PY := /opt/homebrew/bin/python3.14
 venvs:
 	uv venv --python $(FT_PY) .venv
 	uv venv --python $(GIL_PY) .venv-gil
-	uv pip install --python .venv/bin/python maturin uvicorn granian fastapi httpx openapi-spec-validator websockets
-	uv pip install --python .venv-gil/bin/python maturin uvicorn granian fastapi httpx openapi-spec-validator websockets
+	uv pip install --python .venv/bin/python maturin uvicorn granian fastapi httpx openapi-spec-validator websockets redis mcp
+	uv pip install --python .venv-gil/bin/python maturin uvicorn granian fastapi httpx openapi-spec-validator websockets redis mcp
 
 build: build-ft build-gil
 
@@ -39,6 +39,7 @@ verify: build-ft
 	.venv/bin/python tests/query.py
 	.venv/bin/python tests/bodies.py
 	.venv/bin/python tests/openapi.py
+	.venv/bin/python tests/capabilities.py
 	.venv/bin/python tests/streams.py
 	.venv/bin/python tests/sse.py
 	.venv/bin/python tests/websocket.py
@@ -53,6 +54,7 @@ verify-gil: build-gil
 	.venv-gil/bin/python tests/query.py
 	.venv-gil/bin/python tests/bodies.py
 	.venv-gil/bin/python tests/openapi.py
+	.venv-gil/bin/python tests/capabilities.py
 	.venv-gil/bin/python tests/streams.py
 	.venv-gil/bin/python tests/sse.py
 	.venv-gil/bin/python tests/websocket.py
