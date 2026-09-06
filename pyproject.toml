@@ -10,8 +10,9 @@ requires-python = ">=3.13"
 dependencies = ["pydantic>=2.9"]
 
 [project.optional-dependencies]
+redis = ["redis>=5"]
 bench = ["uvicorn", "granian", "fastapi"]
-test = ["httpx", "openapi-spec-validator", "websockets"]
+test = ["httpx", "openapi-spec-validator", "websockets", "redis>=5"]
 
 [tool.maturin]
 python-source = "python"

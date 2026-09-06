@@ -1,0 +1,34 @@
+# Development services for Aether.
+#
+# Everything Aether talks to runs in a container, so nothing has to be
+# installed on the host. Start with `make up`.
+#
+#   redis   backing store for durable topics (milestone 4)
+#
+# Ports are deliberately non-default (6399, not 6379) so this never collides
+# with anything already running on the machine.
+
+name: aether-dev
+
+services:
+  redis:
+    image: redis:8-alpine
+    container_name: aether-redis
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+    ports:
+      - "127.0.0.1:6399:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 2s
+    tmpfs:
+      # Durable topics are durable in Redis, not on the host. Tests should
+      # start from an empty store every time.
+      - /data

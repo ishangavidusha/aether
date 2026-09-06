@@ -27,6 +27,7 @@ naturally, the same principle that made request dispatch fast.
 """
 
 import asyncio
+import sys
 import threading
 from collections import deque
 from typing import Any
@@ -186,12 +187,22 @@ class Subscription:
 
 
 class Topic:
-    """A named fan-out point shared by every worker loop in the process."""
+    """A named fan-out point shared by every worker loop in the process.
 
-    __slots__ = ("name", "maxsize", "policy", "_subs", "_lock")
+    With a backend it is also shared across processes: emitting appends to a
+    Redis stream, and a tail task in every other process feeds its local
+    subscribers. The publishing process delivers locally itself and the tail
+    skips its own node, so nobody sees a message twice.
+    """
+
+    __slots__ = ("name", "maxsize", "policy", "backend", "_subs", "_lock", "_tail")
 
     def __init__(
-        self, name: str, maxsize: int = DEFAULT_MAXSIZE, policy: str = DROP_OLDEST
+        self,
+        name: str,
+        maxsize: int = DEFAULT_MAXSIZE,
+        policy: str = DROP_OLDEST,
+        backend: Any = None,
     ) -> None:
         if policy not in POLICIES:
             raise ValueError(
@@ -202,12 +213,96 @@ class Topic:
         self.name = name
         self.maxsize = maxsize
         self.policy = policy
+        self.backend = backend
         self._subs: list[Subscription] = []
         self._lock = threading.Lock()
+        self._tail: Any = None
 
     @property
     def subscribers(self) -> int:
+        """Local subscribers only. Other processes are not visible from here."""
         return len(self._subs)
+
+    @property
+    def durable(self) -> bool:
+        return self.backend is not None
+
+    def _fan_out(self, item: Any) -> int:
+        """Hand an item to every local subscriber without waiting."""
+        delivered = 0
+        for sub in self._snapshot():
+            if not sub._try_offer(item):
+                # A `block` subscriber with a full buffer. The tail must not
+                # stall on one slow reader, so this behaves as drop_newest.
+                sub.dropped += 1
+            delivered += 1
+        return delivered
+
+    async def _pump(self) -> None:
+        """Feed local subscribers from the stream, skipping our own messages.
+
+        Reconnects rather than dying. A tail that gave up on the first dropped
+        connection would leave the process silently deaf to every other node,
+        with nothing to indicate it: local delivery would keep working, so the
+        failure would only show as messages that never arrive.
+        """
+        delay = 0.5
+        broken = False
+        while True:
+            try:
+                async for _entry_id, value in self.backend.tail(self.name):
+                    if broken:
+                        print(
+                            f"aether: topic {self.name!r} reconnected", file=sys.stderr
+                        )
+                        broken = False
+                    self._fan_out(value)
+                    delay = 0.5
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - connection lost, retry
+                # One line per outage, not per attempt: a full traceback every
+                # half second during a Redis restart buries everything else.
+                if not broken:
+                    print(
+                        f"aether: topic {self.name!r} lost its backend "
+                        f"({type(exc).__name__}: {exc}); retrying",
+                        file=sys.stderr,
+                    )
+                    broken = True
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30.0)
+
+    def _ensure_tail(self) -> None:
+        if self.backend is None or self._tail is not None:
+            return
+        with self._lock:
+            if self._tail is not None:
+                return
+            # Started on whichever worker loop subscribes first. Which loop it
+            # is does not matter: delivery to subscriptions on other loops
+            # already crosses loops safely.
+            self._tail = asyncio.get_running_loop().create_task(self._pump())
+
+    async def history(self, count: int = 100) -> list:
+        """Recent messages, oldest first. Durable topics only."""
+        if self.backend is None:
+            raise RuntimeError(f"topic {self.name!r} is not durable, so it has no history")
+        return await self.backend.history(self.name, count=count)
+
+    def consumer(self, group: str, name: str, **options: Any):
+        """A member of a consumer group, for at-least-once processing.
+
+        Unlike `subscribe`, which is a broadcast to everyone, each message goes
+        to exactly one member of the group and stays pending until acked.
+        """
+        if self.backend is None:
+            raise RuntimeError(
+                f"topic {self.name!r} is not durable; consumer groups need a backend"
+            )
+        from ._redis import Consumer
+
+        return Consumer(self.backend, self.name, group, name, **options)
 
     def subscribe(self, maxsize: int | None = None, policy: str | None = None) -> Subscription:
         """Start receiving. Must be called from inside a running event loop.
@@ -230,6 +325,7 @@ class Topic:
         sub = Subscription(self, maxsize or self.maxsize, policy, loop)
         with self._lock:
             self._subs.append(sub)
+        self._ensure_tail()
         return sub
 
     def _remove(self, sub: Subscription) -> None:
@@ -244,10 +340,19 @@ class Topic:
             return list(self._subs)
 
     async def emit(self, item: Any) -> int:
-        """Deliver to every subscriber. Returns how many received it.
+        """Deliver to every local subscriber. Returns how many received it.
 
-        Only awaits when a subscriber uses the `block` policy and is full.
+        On a durable topic the message is appended to the stream *first*, so
+        that returning means it is recorded and other processes will see it.
+        That costs a round trip, which is the trade being made by asking for
+        durability.
+
+        Only awaits on a local subscriber when it uses the `block` policy and
+        is full.
         """
+        if self.backend is not None:
+            await self.backend.publish(self.name, item)
+
         delivered = 0
         for sub in self._snapshot():
             if not sub._try_offer(item):
@@ -256,11 +361,20 @@ class Topic:
         return delivered
 
     def emit_nowait(self, item: Any) -> int:
-        """Deliver without ever waiting.
+        """Deliver to local subscribers without ever waiting.
 
         A `block` subscriber that is full is treated as `drop_newest`, because
         the alternative here would be blocking a thread that must not block.
+
+        Refused on a durable topic: appending to the stream is an await, so this
+        could only ever deliver locally, and a call named `emit` that silently
+        skipped durability is worse than an error.
         """
+        if self.backend is not None:
+            raise RuntimeError(
+                f"topic {self.name!r} is durable; use `await emit()` so the "
+                f"message is recorded, not just delivered in this process"
+            )
         delivered = 0
         for sub in self._snapshot():
             if not sub._try_offer(item):
@@ -269,8 +383,13 @@ class Topic:
         return delivered
 
     def close(self) -> None:
+        with self._lock:
+            tail, self._tail = self._tail, None
+        if tail is not None:
+            tail.cancel()
         for sub in self._snapshot():
             sub.close()
 
     def __repr__(self) -> str:
-        return f"<Topic {self.name!r} subscribers={self.subscribers}>"
+        kind = "durable" if self.durable else "memory"
+        return f"<Topic {self.name!r} {kind} subscribers={self.subscribers}>"

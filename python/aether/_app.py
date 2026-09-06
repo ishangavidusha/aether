@@ -28,12 +28,16 @@ class App:
         openapi_url: str | None = "/openapi.json",
         docs_url: str | None = "/docs",
         debug: bool = False,
+        redis_url: str | None = None,
     ) -> None:
         """`openapi_url` and `docs_url` can each be set to None to disable them.
 
         `debug` returns handler exception text in the 500 response. Leave it off
         outside development: exception messages routinely carry connection
         strings, file paths and user data.
+
+        `redis_url` enables durable topics. Nothing connects until the first
+        durable topic is used.
         """
         self.routes: list[RouteInfo] = []
         self._topics: dict[str, Topic] = {}
@@ -43,6 +47,8 @@ class App:
         self.openapi_url = openapi_url
         self.docs_url = docs_url
         self.debug = debug
+        self.redis_url = redis_url
+        self._backend: Any = None
 
     def route(self, method: str, path: str):
         method = method.upper()
@@ -86,19 +92,44 @@ class App:
 
         return decorator
 
+    def backend(self) -> Any:
+        """The shared Redis backend, connected lazily on first use."""
+        if self._backend is None:
+            if not self.redis_url:
+                raise RuntimeError(
+                    "durable topics need a redis_url: App(redis_url='redis://...')"
+                )
+            from ._redis import RedisBackend
+
+            self._backend = RedisBackend(self.redis_url)
+        return self._backend
+
     def topic(
-        self, name: str, maxsize: int | None = None, policy: str | None = None
+        self,
+        name: str,
+        maxsize: int | None = None,
+        policy: str | None = None,
+        durable: bool = False,
     ) -> Topic:
         """Get or create a named topic.
 
         Shared across every worker loop in the process, so a message emitted by
-        one handler reaches subscribers running on all of them. `maxsize` and
-        `policy` apply only when the topic is first created.
+        one handler reaches subscribers running on all of them. `durable=True`
+        additionally shares it across processes and records it in Redis, which
+        needs `App(redis_url=...)`.
+
+        `maxsize`, `policy` and `durable` apply only when the topic is first
+        created.
         """
         existing = self._topics.get(name)
         if existing is not None:
             return existing
-        created = Topic(name, maxsize=maxsize or 1024, policy=policy or DROP_OLDEST)
+        created = Topic(
+            name,
+            maxsize=maxsize or 1024,
+            policy=policy or DROP_OLDEST,
+            backend=self.backend() if durable else None,
+        )
         # Racing handlers could both create one; keep whichever landed first so
         # every worker sees the same object.
         return self._topics.setdefault(name, created)

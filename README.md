@@ -3,7 +3,7 @@
 A fast Python REST framework with a Rust core, built-in reactive streams, and
 agent-native interfaces. Hobby project, not a product.
 
-**Status: milestones 1-3 complete.** Routing, typed path and query parameters,
+**Status: milestones 1-4 complete.** Routing, typed path and query parameters,
 pydantic bodies, backpressure, OpenAPI 3.1, in-process topics, Server-Sent
 Events and WebSocket all work. Nothing here is API-stable.
 
@@ -54,7 +54,17 @@ request.
 
 ## Setup
 
-Requires Rust, `uv`, and `oha` (`brew install oha`) for benchmarks.
+Requires Rust, `uv`, Docker for services, and `oha` (`brew install oha`) for
+benchmarks. Nothing Aether depends on is installed on the host.
+
+```bash
+make up             # Redis in a container, for durable topics
+make down           # stop it
+make stack          # build the image, run two nodes against one Redis
+```
+
+Without `make up`, the durable tests print SKIP and pass, so start it before
+trusting a green run.
 
 ```bash
 make venvs          # creates .venv (3.14t) and .venv-gil (3.14), installs deps
@@ -239,6 +249,43 @@ Topics are plain Python, not Rust. Both ends are already Python, so a Rust
 buffer would add a foreign-function crossing on emit and on receive to replace a
 deque operation cheaper than either crossing. Waking a subscriber costs anything
 at all only when it is idle, so a busy stream coalesces naturally.
+
+## Durable topics
+
+A topic backed by a Redis stream persists, replays, and reaches subscribers in
+other processes.
+
+```python
+app = App(redis_url="redis://localhost:6399")
+
+@app.post("/orders")
+async def place(_: Request, body: Order):
+    # Returning means Redis has it, not just this process.
+    await app.topic("orders", durable=True).emit(body)
+    return {"ok": True}
+```
+
+Local subscribers are still served directly, so they do not wait for a round
+trip. A tail task in every other process feeds its subscribers from the stream
+and skips messages its own node published, so nobody sees a message twice.
+
+For work that must not be lost, use a consumer group. Each message goes to
+exactly one member and stays pending until acknowledged:
+
+```python
+async with app.topic("orders", durable=True).consumer("billing", "worker-1") as c:
+    async for message in c:
+        await charge(message.data)
+        await message.ack()      # only now is it done
+```
+
+Kill that worker mid-message and the message comes back when it restarts, or
+another member claims it after `claim_after_ms`. `examples/durable_queue.py`
+demonstrates it; killing the server with 8 jobs unacknowledged recovered all 8.
+
+`emit_nowait` is refused on a durable topic, because appending is an await and
+a call named emit that silently skipped durability would be worse than an
+error. Emitting while Redis is down raises, for the same reason.
 
 ## Server-Sent Events
 
@@ -500,8 +547,6 @@ including the `Content-Length` it would have produced, with no body.
 - A WebSocket cannot be rejected before the handshake completes, so there is no
   auth hook.
 - No cookies, middleware, auth or sessions.
-- Topics are in-memory only. Durability and cross-machine fan-out via Redis
-  Streams is milestone 4.
 - Query parameters cannot be lists; a repeated key uses the first value.
 - No `UUID` or date parameter types yet.
 - No TLS or HTTP/2; expects a terminating proxy in front.

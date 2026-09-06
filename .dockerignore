@@ -1,0 +1,10 @@
+.venv*
+target/
+.redis-test/
+bench/results/
+docs/
+.git/
+__pycache__/
+**/__pycache__/
+*.so
+dist/

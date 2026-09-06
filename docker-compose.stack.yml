@@ -1,0 +1,48 @@
+# A two-node Aether stack, layered on top of docker-compose.yml.
+#
+#   make stack        build the image and bring both nodes up
+#   make stack-down   tear it down
+#
+# The point is cross-process fan-out. Node A and node B are separate processes
+# on separate container network addresses sharing one Redis, which is what a
+# real deployment looks like and what a single-process test cannot represent.
+# Publish to one node and both nodes' subscribers receive it.
+
+services:
+  node-a:
+    image: aether:dev
+    container_name: aether-node-a
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      AETHER_REDIS: redis://redis:6379
+      AETHER_NODE: node-a
+    command: ["python", "examples/cluster_node.py"]
+    ports:
+      - "127.0.0.1:8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 3s
+
+  node-b:
+    image: aether:dev
+    container_name: aether-node-b
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      AETHER_REDIS: redis://redis:6379
+      AETHER_NODE: node-b
+    command: ["python", "examples/cluster_node.py"]
+    ports:
+      - "127.0.0.1:8002:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 3s
