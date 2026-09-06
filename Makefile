@@ -42,6 +42,7 @@ verify: build-ft
 	.venv/bin/python tests/streams.py
 	.venv/bin/python tests/sse.py
 	.venv/bin/python tests/websocket.py
+	.venv/bin/python tests/hardening.py
 	.venv/bin/python tests/backpressure.py
 	.venv/bin/python tests/verify.py
 
@@ -54,6 +55,7 @@ verify-gil: build-gil
 	.venv-gil/bin/python tests/streams.py
 	.venv-gil/bin/python tests/sse.py
 	.venv-gil/bin/python tests/websocket.py
+	.venv-gil/bin/python tests/hardening.py
 	.venv-gil/bin/python tests/backpressure.py
 	.venv-gil/bin/python tests/verify.py
 

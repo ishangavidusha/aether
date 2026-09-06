@@ -14,6 +14,10 @@ from ._workers import default_workers, gil_enabled
 # without letting a slow handler build a backlog that every client outlives.
 DEFAULT_MAX_CONCURRENCY = 1024
 
+#: Largest request body accepted, in bytes. Without a cap a single request can
+#: grow the process by several times the payload before a handler sees it.
+DEFAULT_MAX_BODY = 16 * 1024 * 1024
+
 
 class App:
     def __init__(
@@ -23,8 +27,14 @@ class App:
         description: str = "",
         openapi_url: str | None = "/openapi.json",
         docs_url: str | None = "/docs",
+        debug: bool = False,
     ) -> None:
-        """`openapi_url` and `docs_url` can each be set to None to disable them."""
+        """`openapi_url` and `docs_url` can each be set to None to disable them.
+
+        `debug` returns handler exception text in the 500 response. Leave it off
+        outside development: exception messages routinely carry connection
+        strings, file paths and user data.
+        """
         self.routes: list[RouteInfo] = []
         self._topics: dict[str, Topic] = {}
         self.title = title
@@ -32,6 +42,7 @@ class App:
         self.description = description
         self.openapi_url = openapi_url
         self.docs_url = docs_url
+        self.debug = debug
 
     def route(self, method: str, path: str):
         method = method.upper()
@@ -134,6 +145,7 @@ class App:
         port: int = 8000,
         workers: int | None = None,
         max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
+        max_body: int = DEFAULT_MAX_BODY,
     ) -> None:
         """Serve until interrupted.
 
@@ -143,6 +155,9 @@ class App:
         without bound. Lower it for slow handlers, where a deep backlog only
         adds latency before an inevitable client timeout; raise it to absorb
         larger bursts of fast requests.
+
+        `max_body` caps a request body; anything larger is answered 413 without
+        being buffered.
         """
         from ._core import Server
 
@@ -150,7 +165,8 @@ class App:
         mode = "GIL" if gil_enabled() else "free-threaded"
         print(
             f"Aether: {workers} worker loop(s), max {max_concurrency} concurrent/worker, "
-            f"{mode} Python {sys.version_info.major}.{sys.version_info.minor}",
+            f"{mode} Python {sys.version_info.major}.{sys.version_info.minor}"
+            f"{', debug' if self.debug else ''}",
             flush=True,
         )
         self._register_docs()
@@ -159,6 +175,8 @@ class App:
             for r in self.routes
         ]
         try:
-            Server(host, port, workers, max_concurrency, specs).serve()
+            Server(
+                host, port, workers, max_concurrency, max_body, self.debug, specs
+            ).serve()
         except KeyboardInterrupt:
             pass

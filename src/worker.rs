@@ -28,6 +28,8 @@ struct Drainer {
     run_websocket: Py<PyAny>,
     /// Bound `loop.create_task`.
     create_task: Py<PyAny>,
+    /// Returned to the client in a 500 when set. Per server, never global.
+    debug: bool,
     /// Read end of the wake socketpair.
     reader: UnixStream,
     /// Handed to each `Responder` so streams can watch for disconnects.
@@ -96,7 +98,7 @@ impl Drainer {
                         .bind(py)
                         .call1((handler, request, responder, socket, params))?
                 }
-                None => run_handler.call1((handler, request, responder, params))?,
+                None => run_handler.call1((handler, request, responder, params, self.debug))?,
             };
             create_task.call1((coro,))?;
         }
@@ -120,6 +122,7 @@ impl Worker {
         routes: Arc<Vec<Py<PyAny>>>,
         router: Arc<Router>,
         limit: usize,
+        debug: bool,
         tokio_handle: tokio::runtime::Handle,
     ) -> PyResult<Self> {
         let (write_end, read_end) = UnixStream::pair()?;
@@ -144,6 +147,7 @@ impl Worker {
                             run_handler: runtime.getattr("run_handler")?.unbind(),
                             run_websocket: runtime.getattr("run_websocket")?.unbind(),
                             create_task: event_loop.getattr("create_task")?.unbind(),
+                            debug,
                             reader: read_end,
                             runtime: tokio_handle,
                         };

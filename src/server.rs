@@ -5,15 +5,15 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Full, StreamBody};
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited, StreamBody};
 use hyper::body::{Frame, Incoming};
 use hyper::header::{
-    ALLOW, CONNECTION, CONTENT_TYPE, RETRY_AFTER, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY,
-    SEC_WEBSOCKET_VERSION, UPGRADE,
+    ALLOW, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER, SEC_WEBSOCKET_ACCEPT,
+    SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE,
 };
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Response, StatusCode};
+use hyper::{Method, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -32,6 +32,9 @@ struct State {
     router: Arc<Router>,
     workers: Vec<Worker>,
     next_worker: AtomicUsize,
+    /// Cap on a request body. Without one, a single request can grow the
+    /// process by several times the payload before the handler ever sees it.
+    max_body: usize,
 }
 
 #[pyclass(name = "Server", module = "aether._core")]
@@ -40,6 +43,8 @@ pub struct Server {
     port: u16,
     worker_count: usize,
     max_concurrency: usize,
+    max_body: usize,
+    debug: bool,
     routes: Vec<Route>,
 }
 
@@ -54,6 +59,8 @@ impl Server {
         port: u16,
         workers: usize,
         max_concurrency: usize,
+        max_body: usize,
+        debug: bool,
         routes: Vec<Route>,
     ) -> Self {
         Self {
@@ -61,6 +68,8 @@ impl Server {
             port,
             worker_count: workers.max(1),
             max_concurrency: max_concurrency.max(1),
+            max_body,
+            debug,
             routes,
         }
     }
@@ -99,6 +108,7 @@ impl Server {
                 handlers.clone(),
                 router.clone(),
                 self.max_concurrency,
+                self.debug,
                 runtime.handle().clone(),
             )?);
         }
@@ -107,6 +117,7 @@ impl Server {
             router,
             workers,
             next_worker: AtomicUsize::new(0),
+            max_body: self.max_body,
         });
 
         let addr: SocketAddr = format!("{}:{}", self.host, self.port)
@@ -184,6 +195,14 @@ fn overloaded() -> Response<Out> {
         .header(CONTENT_TYPE, "text/plain")
         .header(RETRY_AFTER, "1")
         .body(full(Bytes::from_static(b"server overloaded")))
+        .unwrap()
+}
+
+fn too_large() -> Response<Out> {
+    Response::builder()
+        .status(StatusCode::PAYLOAD_TOO_LARGE)
+        .header(CONTENT_TYPE, "text/plain")
+        .body(full(Bytes::from_static(b"request body too large")))
         .unwrap()
 }
 
@@ -299,10 +318,29 @@ async fn handle(
     req: hyper::Request<Incoming>,
     state: Arc<State>,
 ) -> Result<Response<Out>, Infallible> {
-    let matched = match state
+    // HTTP requires HEAD wherever GET is allowed, so a miss on HEAD retries as
+    // GET and the body is dropped from the reply below.
+    let head = req.method() == Method::HEAD;
+    let found = state
         .router
-        .find(req.method().as_str(), req.uri().path(), req.uri().query())
-    {
+        .find(req.method().as_str(), req.uri().path(), req.uri().query());
+    let found = match found {
+        Err(RouteError::NotFound) | Err(RouteError::MethodNotAllowed(_)) if head => state
+            .router
+            .find("GET", req.uri().path(), req.uri().query())
+            // A HEAD cannot open a socket, so leave upgrade routes to fail.
+            .and_then(|m| {
+                if state.router.spec(m.route).websocket {
+                    Err(RouteError::MethodNotAllowed("GET".to_owned()))
+                } else {
+                    Ok(m)
+                }
+            })
+            .or(found),
+        other => other,
+    };
+
+    let matched = match found {
         Ok(matched) => matched,
         Err(RouteError::NotFound) => return Ok(plain(StatusCode::NOT_FOUND, "not found")),
         Err(RouteError::MethodNotAllowed(allow)) => return Ok(method_not_allowed(allow)),
@@ -319,8 +357,12 @@ async fn handle(
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
-    let Ok(collected) = req.into_body().collect().await else {
-        return Ok(plain(StatusCode::BAD_REQUEST, "bad body"));
+    let collected = match Limited::new(req.into_body(), state.max_body).collect().await {
+        Ok(collected) => collected,
+        Err(err) if err.downcast_ref::<LengthLimitError>().is_some() => {
+            return Ok(too_large())
+        }
+        Err(_) => return Ok(plain(StatusCode::BAD_REQUEST, "bad body")),
     };
 
     let (reply_tx, reply_rx) = oneshot::channel::<Reply>();
@@ -345,6 +387,25 @@ async fn handle(
 
     match reply_rx.await {
         Ok(reply) => {
+            // A HEAD reply carries the headers a GET would, including the
+            // length it would have had, but no body.
+            if head {
+                let length = match &reply.body {
+                    Body::Full(bytes) => bytes.len(),
+                    Body::Stream(..) => 0,
+                };
+                let mut builder = Response::builder()
+                    .status(reply.status)
+                    .header(CONTENT_TYPE, reply.content_type)
+                    .header(CONTENT_LENGTH, length);
+                for (name, value) in &reply.headers {
+                    builder = builder.header(name.as_str(), value.as_str());
+                }
+                return Ok(builder.body(full(Bytes::new())).unwrap_or_else(|_| {
+                    plain(StatusCode::INTERNAL_SERVER_ERROR, "bad response header")
+                }));
+            }
+
             let body = match reply.body {
                 Body::Full(bytes) => full(Bytes::from(bytes)),
                 // Headers go out now; chunks follow as the handler produces

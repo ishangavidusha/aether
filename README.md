@@ -3,7 +3,7 @@
 A fast Python REST framework with a Rust core, built-in reactive streams, and
 agent-native interfaces. Hobby project, not a product.
 
-**Status: milestone 3 complete.** Routing, typed path and query parameters,
+**Status: milestones 1-3 complete.** Routing, typed path and query parameters,
 pydantic bodies, backpressure, OpenAPI 3.1, in-process topics, Server-Sent
 Events and WebSocket all work. Nothing here is API-stable.
 
@@ -471,16 +471,40 @@ times and all worker loops used.
 make verify
 ```
 
+## Errors and limits
+
+A handler that raises returns 500 with no detail. The traceback goes to the
+server log; exception messages routinely carry connection strings, file paths
+and user data, none of which belongs in an HTTP response. During development:
+
+```python
+app = App(debug=True)   # include the exception in the 500 body
+```
+
+Request bodies are capped at 16 MiB, and anything larger is answered 413 without
+being buffered:
+
+```python
+app.run(max_body=64 * 1024 * 1024)
+```
+
+`HEAD` is answered wherever `GET` is, returning the headers a `GET` would,
+including the `Content-Length` it would have produced, with no body.
+
 ## Known gaps
 
-- `HEAD` returns 405 everywhere. HTTP requires it wherever `GET` is allowed.
-- A WebSocket cannot be rejected after inspection; the handshake completes
-  before the handler runs. Needs a pre-accept hook.
-- No cookies, no middleware, no auth.
+- No request timeouts, so a slow client can hold a connection open.
+- No cap on accepted connections; `max_concurrency` bounds handler slots, not
+  sockets.
+- Shutdown drops in-flight requests instead of draining them.
+- A WebSocket cannot be rejected before the handshake completes, so there is no
+  auth hook.
+- No cookies, middleware, auth or sessions.
 - Topics are in-memory only. Durability and cross-machine fan-out via Redis
   Streams is milestone 4.
 - Query parameters cannot be lists; a repeated key uses the first value.
 - No `UUID` or date parameter types yet.
+- No TLS or HTTP/2; expects a terminating proxy in front.
 
 ## Open questions
 

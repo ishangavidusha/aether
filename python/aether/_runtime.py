@@ -7,6 +7,7 @@ parameters already coerced to Python objects.
 """
 
 import asyncio
+import traceback
 
 from ._response import Response
 from ._schema import RequestValidationError, is_model_instance, to_json
@@ -48,8 +49,6 @@ async def run_websocket(handler, request, responder, core, params):
         else:
             exc = task.exception()
             if exc is not None:
-                import traceback
-
                 traceback.print_exception(exc)
     finally:
         core.close()
@@ -121,19 +120,28 @@ def make_worker_loop():
     return loop
 
 
-async def run_handler(handler, request, responder, params):
+async def run_handler(handler, request, responder, params, debug):
     """Await one handler and turn whatever it returns into a response.
 
     `params` is None for routes with no path parameters, which keeps the
     common case free of an extra dict and an unpacking call.
+
+    `debug` is passed per server rather than held as module state, so two apps
+    in one process cannot end up sharing one another's setting.
     """
     try:
         result = await (handler(request) if params is None else handler(request, **params))
     except RequestValidationError as exc:
         responder.send(422, "application/json", exc.body)
         return
-    except Exception as exc:  # noqa: BLE001 - spike: surface anything
-        responder.send(500, "text/plain; charset=utf-8", f"{type(exc).__name__}: {exc}".encode())
+    except Exception as exc:  # noqa: BLE001 - a handler crash must still answer
+        # The detail goes to the server's log. The client gets a status and
+        # nothing else, unless the app was started with debug=True.
+        traceback.print_exception(exc)
+        detail = (
+            f"{type(exc).__name__}: {exc}".encode() if debug else b"internal server error"
+        )
+        responder.send(500, "text/plain; charset=utf-8", detail)
         return
 
     if isinstance(result, SSE):
