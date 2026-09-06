@@ -31,6 +31,7 @@ pub struct Pending {
     pub path: String,
     pub query: Option<String>,
     pub body: Vec<u8>,
+    pub headers: hyper::HeaderMap,
     pub reply: oneshot::Sender<Reply>,
     /// Set for an upgraded connection. The handler gets a socket instead of
     /// producing a reply, since the 101 has already gone out.

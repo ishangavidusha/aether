@@ -1,0 +1,102 @@
+"""Middleware: code that runs around every handler.
+
+    @app.middleware
+    async def timing(request, call_next):
+        started = time.perf_counter()
+        reply = await call_next(request)
+        reply.headers["x-elapsed-ms"] = f"{(time.perf_counter() - started) * 1000:.1f}"
+        return reply
+
+Middleware runs in the order it was registered, outermost first, and unwinds in
+reverse. It can observe a request, add response headers, change the status, or
+refuse to call the handler at all.
+
+**What `call_next` returns is a `Reply`, not a finished response.** It holds
+whatever the handler returned, still unserialized. That is deliberate: a
+handler returning a dict is encoded to JSON in Rust, and materializing a body
+just so middleware could look at it would throw that away on every request.
+Middleware that genuinely needs the bytes can set `reply.value` to a
+`Response`.
+
+Routes with no middleware registered are untouched and pay nothing.
+"""
+
+from typing import Any
+
+from ._response import Response
+
+
+class Reply:
+    """A handler's result on its way back out.
+
+    `value` is whatever the handler returned: a dict, a model, a `Response`, an
+    `SSE`, or None. `status` overrides what that value would otherwise imply.
+    `headers` are added to the response.
+    """
+
+    __slots__ = ("value", "status", "headers")
+
+    def __init__(
+        self,
+        value: Any = None,
+        status: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.value = value
+        self.status = status
+        self.headers = headers if headers is not None else {}
+
+    def __repr__(self) -> str:
+        return f"<Reply status={self.status} value={type(self.value).__name__}>"
+
+
+def as_reply(result: Any) -> Reply:
+    return result if isinstance(result, Reply) else Reply(result)
+
+
+def _link(middleware: Any, nxt: Any):
+    async def call(request):
+        return as_reply(await middleware(request, nxt))
+
+    return call
+
+
+def wrap(handler: Any, middlewares: list[Any]) -> Any:
+    """Return a handler that runs `middlewares` around `handler`."""
+
+    async def dispatch(request, **params):
+        async def endpoint(req):
+            return as_reply(await handler(req, **params))
+
+        call = endpoint
+        # Reversed so the first-registered middleware ends up outermost.
+        for middleware in reversed(middlewares):
+            call = _link(middleware, call)
+        return await call(request)
+
+    dispatch.__name__ = getattr(handler, "__name__", "handler")
+    dispatch.__qualname__ = getattr(handler, "__qualname__", "handler")
+    return dispatch
+
+
+def merge(reply: Reply) -> tuple[Any, int | None, list[tuple[str, str]] | None]:
+    """Fold a Reply into (value, status override, extra headers).
+
+    A `Response` inside a Reply keeps its own status and headers; the Reply's
+    are added on top, so middleware can annotate a response it did not build.
+    """
+    value = reply.value
+    headers = dict(reply.headers)
+    status = reply.status
+
+    if isinstance(value, Response):
+        combined = {**value.headers, **headers}
+        value = Response(
+            value.body,
+            status=status if status is not None else value.status,
+            content_type=value.content_type,
+            headers=combined,
+        )
+        return value, None, None
+
+    return value, status, list(headers.items()) or None

@@ -2,6 +2,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
@@ -14,11 +15,11 @@ use hyper::header::{
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Notify};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 
@@ -32,6 +33,7 @@ struct State {
     router: Arc<Router>,
     workers: Vec<Worker>,
     next_worker: AtomicUsize,
+    request_timeout: Option<Duration>,
     /// Cap on a request body. Without one, a single request can grow the
     /// process by several times the payload before the handler ever sees it.
     max_body: usize,
@@ -45,6 +47,12 @@ pub struct Server {
     max_concurrency: usize,
     max_body: usize,
     debug: bool,
+    request_timeout: Option<Duration>,
+    shutdown_grace: Duration,
+    /// Lets something other than Ctrl-C stop the server. `serve` blocks, so a
+    /// test harness needs a way in from another thread.
+    stop: Arc<Notify>,
+    quiet: bool,
     routes: Vec<Route>,
 }
 
@@ -61,6 +69,9 @@ impl Server {
         max_concurrency: usize,
         max_body: usize,
         debug: bool,
+        request_timeout_secs: f64,
+        shutdown_grace_secs: f64,
+        quiet: bool,
         routes: Vec<Route>,
     ) -> Self {
         Self {
@@ -70,12 +81,25 @@ impl Server {
             max_concurrency: max_concurrency.max(1),
             max_body,
             debug,
+            // Zero disables the timeout, for a service whose handlers are
+            // legitimately long-running.
+            request_timeout: (request_timeout_secs > 0.0)
+                .then(|| Duration::from_secs_f64(request_timeout_secs)),
+            shutdown_grace: Duration::from_secs_f64(shutdown_grace_secs.max(0.0)),
+            stop: Arc::new(Notify::new()),
+            quiet,
             routes,
         }
     }
 
-    /// Start workers, bind, and serve until Ctrl-C. Blocks the calling thread
-    /// but detaches from the interpreter for the duration.
+    /// Ask a running server to stop accepting and drain. Safe to call from
+    /// another thread, which is the point: `serve` blocks the one it is on.
+    fn shutdown(&self) {
+        self.stop.notify_waiters();
+    }
+
+    /// Start workers, bind, and serve until Ctrl-C or `shutdown`. Blocks the
+    /// calling thread but detaches from the interpreter for the duration.
     fn serve(&self, py: Python<'_>) -> PyResult<()> {
         let handlers: Arc<Vec<Py<PyAny>>> = Arc::new(
             self.routes
@@ -117,6 +141,7 @@ impl Server {
             router,
             workers,
             next_worker: AtomicUsize::new(0),
+            request_timeout: self.request_timeout,
             max_body: self.max_body,
         });
 
@@ -125,7 +150,32 @@ impl Server {
             .map_err(|e| PyRuntimeError::new_err(format!("bad address: {e}")))?;
 
         let shutdown = state.clone();
-        let result: Result<(), String> = py.detach(|| runtime.block_on(serve_loop(addr, state)));
+        let stop = self.stop.clone();
+        let quiet = self.quiet;
+        let result: Result<(), String> =
+            py.detach(|| runtime.block_on(serve_loop(addr, state, stop, quiet)));
+
+        // Draining. The listener has stopped, but connection tasks are still
+        // on the runtime and handlers are still on the worker loops, so wait
+        // for them rather than dropping their clients mid-request.
+        let grace = self.shutdown_grace;
+        let drained = py.detach(|| {
+            let deadline = Instant::now() + grace;
+            loop {
+                let busy: usize = shutdown.workers.iter().map(|w| w.queue.load()).sum();
+                if busy == 0 {
+                    return true;
+                }
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        });
+        if !drained {
+            let busy: usize = shutdown.workers.iter().map(|w| w.queue.load()).sum();
+            eprintln!("aether: shutdown grace expired with {busy} request(s) still in flight");
+        }
 
         for w in &shutdown.workers {
             w.stop(py);
@@ -136,11 +186,18 @@ impl Server {
     }
 }
 
-async fn serve_loop(addr: SocketAddr, state: Arc<State>) -> Result<(), String> {
+async fn serve_loop(
+    addr: SocketAddr,
+    state: Arc<State>,
+    stop: Arc<Notify>,
+    quiet: bool,
+) -> Result<(), String> {
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|e| format!("bind {addr}: {e}"))?;
-    println!("Aether listening on http://{addr}");
+    if !quiet {
+        println!("Aether listening on http://{addr}");
+    }
 
     loop {
         tokio::select! {
@@ -153,13 +210,21 @@ async fn serve_loop(addr: SocketAddr, state: Arc<State>) -> Result<(), String> {
                     let svc = service_fn(move |req| handle(req, state.clone()));
                     // `with_upgrades` is required for 101 responses to hand
                     // the connection over instead of closing it.
+                    //
+                    // The header timeout is what stops a client from opening a
+                    // connection and dribbling request headers forever.
                     let _ = http1::Builder::new()
+                        // hyper panics on a timeout with no timer wired in,
+                        // so this line is load-bearing, not decorative.
+                        .timer(TokioTimer::new())
+                        .header_read_timeout(Some(Duration::from_secs(15)))
                         .serve_connection(io, svc)
                         .with_upgrades()
                         .await;
                 });
             }
             _ = tokio::signal::ctrl_c() => break,
+            _ = stop.notified() => break,
         }
     }
     Ok(())
@@ -286,6 +351,7 @@ async fn upgrade_websocket(
             path: req.uri().path().to_owned(),
             query: req.uri().query().map(str::to_owned),
             body: Vec::new(),
+            headers: req.headers().clone(),
             reply: reply_tx,
             websocket: Some(shared.clone()),
         },
@@ -315,7 +381,7 @@ async fn upgrade_websocket(
 }
 
 async fn handle(
-    req: hyper::Request<Incoming>,
+    mut req: hyper::Request<Incoming>,
     state: Arc<State>,
 ) -> Result<Response<Out>, Infallible> {
     // HTTP requires HEAD wherever GET is allowed, so a miss on HEAD retries as
@@ -357,6 +423,9 @@ async fn handle(
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
+    // Moved, not copied: handing the whole map over costs nothing, and a
+    // handler that never reads a header never pays to convert one.
+    let headers = std::mem::take(req.headers_mut());
     let collected = match Limited::new(req.into_body(), state.max_body).collect().await {
         Ok(collected) => collected,
         Err(err) if err.downcast_ref::<LengthLimitError>().is_some() => {
@@ -373,6 +442,7 @@ async fn handle(
         path,
         query,
         body: collected.to_bytes().to_vec(),
+        headers,
         reply: reply_tx,
         websocket: None,
     };
@@ -385,7 +455,22 @@ async fn handle(
         return Ok(overloaded());
     }
 
-    match reply_rx.await {
+    // Waiting only for the *first* reply, so a long-lived SSE stream is not
+    // affected: its headers go out as soon as the handler starts streaming.
+    let replied = match state.request_timeout {
+        Some(limit) => match tokio::time::timeout(limit, reply_rx).await {
+            Ok(result) => result,
+            Err(_) => {
+                return Ok(plain(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "handler did not respond in time",
+                ))
+            }
+        },
+        None => reply_rx.await,
+    };
+
+    match replied {
         Ok(reply) => {
             // A HEAD reply carries the headers a GET would, including the
             // length it would have had, but no body.

@@ -85,6 +85,7 @@ impl Drainer {
                     path: item.path,
                     query: item.query,
                     body: item.body,
+                    headers: item.headers,
                 },
             )?;
             let responder = Py::new(

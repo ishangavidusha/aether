@@ -5,6 +5,7 @@ from typing import Any
 
 from . import _openapi
 from ._response import Response
+from ._middleware import Reply, wrap as wrap_middleware
 from ._routing import RouteInfo, build_route
 from ._streams import DROP_OLDEST, Topic
 from ._workers import default_workers, gil_enabled
@@ -13,6 +14,12 @@ from ._workers import default_workers, gil_enabled
 # before the server sheds load. Enough to absorb a burst of fast requests
 # without letting a slow handler build a backlog that every client outlives.
 DEFAULT_MAX_CONCURRENCY = 1024
+
+#: Seconds to wait for a handler's first response before answering 504. Zero
+#: disables it, for a service whose handlers are legitimately long-running.
+DEFAULT_REQUEST_TIMEOUT = 30.0
+#: Seconds to let in-flight requests finish after Ctrl-C before stopping.
+DEFAULT_SHUTDOWN_GRACE = 10.0
 
 #: Largest request body accepted, in bytes. Without a cap a single request can
 #: grow the process by several times the payload before a handler sees it.
@@ -45,6 +52,7 @@ class App:
         readable resources. Set it to None to turn the endpoint off entirely.
         """
         self.routes: list[RouteInfo] = []
+        self._middleware: list[Any] = []
         self._topics: dict[str, Topic] = {}
         self.title = title
         self.version = version
@@ -84,6 +92,22 @@ class App:
 
     def delete(self, path: str, tool: bool = False):
         return self.route("DELETE", path, tool=tool)
+
+    def middleware(self, fn):
+        """Register middleware, which runs around every HTTP handler.
+
+            @app.middleware
+            async def require_key(request, call_next):
+                if request.header("x-api-key") != SECRET:
+                    return Reply({"error": "unauthorized"}, status=401)
+                return await call_next(request)
+
+        Runs outermost-first in registration order. WebSocket routes are not
+        wrapped: their handshake completes before the handler runs, so there is
+        nothing useful to intercept yet.
+        """
+        self._middleware.append(fn)
+        return fn
 
     def websocket(self, path: str):
         """Register a WebSocket endpoint.
@@ -217,6 +241,8 @@ class App:
         workers: int | None = None,
         max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
         max_body: int = DEFAULT_MAX_BODY,
+        request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
+        shutdown_grace: float = DEFAULT_SHUTDOWN_GRACE,
     ) -> None:
         """Serve until interrupted.
 
@@ -229,28 +255,77 @@ class App:
 
         `max_body` caps a request body; anything larger is answered 413 without
         being buffered.
+
+        `request_timeout` is how long to wait for a handler's first response
+        before answering 504. It does not cut short a stream that has already
+        started, so SSE and WebSocket are unaffected. Zero disables it.
+
+        `shutdown_grace` is how long Ctrl-C waits for in-flight requests to
+        finish before stopping anyway.
+        """
+        server = self.build_server(
+            host, port, workers, max_concurrency, max_body, request_timeout,
+            shutdown_grace, announce=True,
+        )
+        try:
+            server.serve()
+        except KeyboardInterrupt:
+            pass
+
+    def build_server(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        workers: int | None = None,
+        max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
+        max_body: int = DEFAULT_MAX_BODY,
+        request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
+        shutdown_grace: float = DEFAULT_SHUTDOWN_GRACE,
+        announce: bool = False,
+    ):
+        """Prepare a server without starting it.
+
+        `run` uses this; so does the test client, which needs to start the
+        server on one thread and stop it from another.
         """
         from ._core import Server
 
         workers = workers or default_workers()
         mode = "GIL" if gil_enabled() else "free-threaded"
-        print(
-            f"Aether: {workers} worker loop(s), max {max_concurrency} concurrent/worker, "
-            f"{mode} Python {sys.version_info.major}.{sys.version_info.minor}"
-            f"{', debug' if self.debug else ''}",
-            flush=True,
-        )
+        if announce:
+            print(
+                f"Aether: {workers} worker loop(s), max {max_concurrency} concurrent/worker, "
+                f"{mode} Python {sys.version_info.major}.{sys.version_info.minor}"
+                f"{', debug' if self.debug else ''}",
+                flush=True,
+            )
         # Docs first: the document is built from the routes registered so far,
         # so registering /mcp afterwards keeps it out of the OpenAPI paths.
         self._register_docs()
         self._register_mcp()
         specs = [
-            (r.method, r.path, r.target, [p.as_spec() for p in r.params], r.websocket)
+            (
+                r.method,
+                r.path,
+                # Sockets are left alone, and a route pays nothing when no
+                # middleware is registered.
+                r.target
+                if r.websocket or not self._middleware
+                else wrap_middleware(r.target, self._middleware),
+                [p.as_spec() for p in r.params],
+                r.websocket,
+            )
             for r in self.routes
         ]
-        try:
-            Server(
-                host, port, workers, max_concurrency, max_body, self.debug, specs
-            ).serve()
-        except KeyboardInterrupt:
-            pass
+        return Server(
+            host,
+            port,
+            workers,
+            max_concurrency,
+            max_body,
+            self.debug,
+            request_timeout,
+            shutdown_grace,
+            not announce,
+            specs,
+        )

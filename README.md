@@ -3,7 +3,7 @@
 A fast Python REST framework with a Rust core, built-in reactive streams, and
 agent-native interfaces. Hobby project, not a product.
 
-**Status: milestones 1-5 complete.** Routing, typed path and query parameters,
+**Status: milestones 1-6 complete.** Routing, typed path and query parameters,
 pydantic bodies, backpressure, OpenAPI 3.1, in-process topics, Server-Sent
 Events and WebSocket all work. Nothing here is API-stable.
 
@@ -557,6 +557,57 @@ times and all worker loops used.
 make verify
 ```
 
+## Middleware
+
+```python
+@app.middleware
+async def require_key(request, call_next):
+    if request.header("x-api-key") != SECRET:
+        return Reply({"error": "unauthorized"}, status=401)
+    reply = await call_next(request)
+    reply.headers["x-served-by"] = "aether"
+    return reply
+```
+
+Middleware runs outermost-first in registration order. It can observe a
+request, add response headers, change the status, or refuse to call the handler
+at all.
+
+What `call_next` returns is a `Reply`, not a finished response: it holds
+whatever the handler returned, still unserialized. A handler returning a dict is
+encoded to JSON in Rust, and materializing a body just so middleware could look
+at it would throw that away on every request. Routes are untouched when no
+middleware is registered.
+
+## Requests
+
+```python
+@app.get("/me")
+async def me(req: Request):
+    token = req.header("authorization")       # case-insensitive, None if absent
+    theme = req.cookies.get("theme", "light")
+    return {"token": token, "theme": theme}
+```
+
+`req.headers` is the full dict, built only when asked for; `req.header(name)`
+looks one up without building it. Headers stay in hyper's own map until Python
+wants them, so a handler that never reads one pays nothing.
+
+## Testing
+
+```python
+from aether.testing import TestClient
+
+with TestClient(app) as client:
+    assert client.get("/users/1").json() == {"id": 1}
+    assert client.call_tool("get_user", {"user_id": 1}) == {"id": 1}
+```
+
+It starts the real server on a free port. A client that called handlers
+directly would skip routing, coercion, body limits, header handling and the 405
+and 413 paths, which are the parts most worth testing. `client.websocket(path)`
+and `client.stream(...)` cover sockets and SSE.
+
 ## Errors and limits
 
 A handler that raises returns 500 with no detail. The traceback goes to the
@@ -577,15 +628,23 @@ app.run(max_body=64 * 1024 * 1024)
 `HEAD` is answered wherever `GET` is, returning the headers a `GET` would,
 including the `Content-Length` it would have produced, with no body.
 
+A handler that does not respond within `request_timeout` (30s by default)
+returns 504 and frees the connection. It does not cut short a stream that has
+already started, so SSE and WebSocket are unaffected. Connections also get a
+15s header-read timeout. Set `request_timeout=0` to disable it; it costs about
+5-8% of hello-world throughput.
+
+Ctrl-C stops accepting and waits up to `shutdown_grace` (10s) for in-flight
+requests to finish before stopping.
+
 ## Known gaps
 
-- No request timeouts, so a slow client can hold a connection open.
 - No cap on accepted connections; `max_concurrency` bounds handler slots, not
   sockets.
-- Shutdown drops in-flight requests instead of draining them.
 - A WebSocket cannot be rejected before the handshake completes, so there is no
-  auth hook.
-- No cookies, middleware, auth or sessions.
+  auth hook, and middleware does not wrap socket routes.
+- No sessions, dependency injection, or auth helpers.
+- No structured logging; errors go to stderr as tracebacks.
 - Query parameters cannot be lists; a repeated key uses the first value.
 - No `UUID` or date parameter types yet.
 - No TLS or HTTP/2; expects a terminating proxy in front.

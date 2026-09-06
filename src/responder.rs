@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
@@ -64,15 +65,26 @@ pub struct Responder {
     body_dropped: Mutex<Option<oneshot::Receiver<()>>>,
     /// Lets a long-lived stream learn that its client is gone without polling.
     runtime: tokio::runtime::Handle,
-    /// Holding the worker's queue lets the in-flight count fall when this
-    /// responder is dropped, which is the only place that reliably runs whether
-    /// the handler replied, raised, or was cancelled mid-await.
+    /// Holding the worker's queue lets the in-flight count fall when the
+    /// request is finished.
     queue: Arc<WorkerQueue>,
+    /// Guards against releasing twice, since both `finish` and `Drop` release.
+    released: AtomicBool,
 }
 
 impl Drop for Responder {
     fn drop(&mut self) {
-        self.queue.release();
+        // Backstop for a task that was cancelled or abandoned without calling
+        // `finish`. Ordinarily `finish` has already run.
+        self.release_once();
+    }
+}
+
+impl Responder {
+    fn release_once(&self) {
+        if !self.released.swap(true, Ordering::SeqCst) {
+            self.queue.release();
+        }
     }
 }
 
@@ -88,6 +100,7 @@ impl Responder {
             body_dropped: Mutex::new(None),
             runtime,
             queue,
+            released: AtomicBool::new(false),
         }
     }
 
@@ -169,6 +182,16 @@ impl Responder {
             Err(mpsc::error::TrySendError::Closed(_)) => ChunkResult::Closed,
         }
         .code())
+    }
+
+    /// Mark the request finished and free its concurrency slot.
+    ///
+    /// Explicit rather than left to `Drop`, because dropping depends on when
+    /// Python releases the object, and the SSE path forms a reference cycle
+    /// that the cyclic collector only breaks later. A slot is a resource
+    /// limit; it cannot be governed by garbage-collection timing.
+    fn finish(&self) {
+        self.release_once();
     }
 
     /// Close a streaming response.

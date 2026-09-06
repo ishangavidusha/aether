@@ -9,6 +9,7 @@ parameters already coerced to Python objects.
 import asyncio
 import traceback
 
+from ._middleware import Reply, merge
 from ._response import Response
 from ._schema import RequestValidationError, is_model_instance, to_json
 from ._sse import CLOSED, SSE, SSE_HEADERS, format_event
@@ -52,6 +53,7 @@ async def run_websocket(handler, request, responder, core, params):
                 traceback.print_exception(exc)
     finally:
         core.close()
+        responder.finish()
 
 
 async def pump_sse(sse, responder):
@@ -130,6 +132,15 @@ async def run_handler(handler, request, responder, params, debug):
     in one process cannot end up sharing one another's setting.
     """
     try:
+        await _respond(handler, request, responder, params, debug)
+    finally:
+        # Frees the worker's concurrency slot now rather than whenever Python
+        # happens to collect the responder.
+        responder.finish()
+
+
+async def _respond(handler, request, responder, params, debug):
+    try:
         result = await (handler(request) if params is None else handler(request, **params))
     except RequestValidationError as exc:
         responder.send(422, "application/json", exc.body)
@@ -144,6 +155,11 @@ async def run_handler(handler, request, responder, params, debug):
         responder.send(500, "text/plain; charset=utf-8", detail)
         return
 
+    status_override = None
+    extra_headers = None
+    if isinstance(result, Reply):
+        result, status_override, extra_headers = merge(result)
+
     if isinstance(result, SSE):
         await pump_sse(result, responder)
     elif isinstance(result, Response):
@@ -151,14 +167,36 @@ async def run_handler(handler, request, responder, params, debug):
             result.status, result.content_type, result.encoded(), result.header_list()
         )
     elif result is None:
-        responder.send(204, "text/plain", b"")
+        responder.send(status_override or 204, "text/plain", b"", extra_headers)
     elif is_model_instance(result):
         # pydantic serializes straight to bytes, so this skips both a Python
         # str and our own JSON encoder.
-        responder.send(200, "application/json", to_json(result))
+        responder.send(
+            status_override or 200, "application/json", to_json(result), extra_headers
+        )
     elif isinstance(result, (bytes, bytearray, memoryview)):
-        responder.send(200, "application/octet-stream", bytes(result))
+        responder.send(
+            status_override or 200,
+            "application/octet-stream",
+            bytes(result),
+            extra_headers,
+        )
     elif isinstance(result, str):
-        responder.send(200, "text/plain; charset=utf-8", result.encode())
+        responder.send(
+            status_override or 200,
+            "text/plain; charset=utf-8",
+            result.encode(),
+            extra_headers,
+        )
+    elif status_override is not None or extra_headers is not None:
+        # send_json cannot carry a status or headers, so encode here instead.
+        import json as _json
+
+        responder.send(
+            status_override or 200,
+            "application/json",
+            _json.dumps(result, default=str).encode(),
+            extra_headers,
+        )
     else:
         responder.send_json(200, result)
