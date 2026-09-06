@@ -7,8 +7,10 @@ parameters already coerced to Python objects.
 """
 
 import asyncio
-import traceback
+import datetime
+import uuid
 
+from ._logging import logger
 from ._middleware import Reply, merge
 from ._response import Response
 from ._schema import RequestValidationError, is_model_instance, to_json
@@ -50,7 +52,7 @@ async def run_websocket(handler, request, responder, core, params):
         else:
             exc = task.exception()
             if exc is not None:
-                traceback.print_exception(exc)
+                logger.exception("websocket handler raised", exc_info=exc)
     finally:
         core.close()
         responder.finish()
@@ -116,6 +118,14 @@ async def pump_sse(sse, responder):
             close()
 
 
+#: Constructors the Rust side calls for parameter types it validated but
+#: cannot build. Values reaching these have already been canonicalised in Rust,
+#: so they cannot fail here.
+make_uuid = uuid.UUID
+make_date = datetime.date.fromisoformat
+make_datetime = datetime.datetime.fromisoformat
+
+
 def make_worker_loop():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -148,7 +158,11 @@ async def _respond(handler, request, responder, params, debug):
     except Exception as exc:  # noqa: BLE001 - a handler crash must still answer
         # The detail goes to the server's log. The client gets a status and
         # nothing else, unless the app was started with debug=True.
-        traceback.print_exception(exc)
+        logger.exception(
+            "handler raised",
+            exc_info=exc,
+            extra={"method": request.method, "path": request.path},
+        )
         detail = (
             f"{type(exc).__name__}: {exc}".encode() if debug else b"internal server error"
         )

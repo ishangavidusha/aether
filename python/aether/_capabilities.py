@@ -22,6 +22,9 @@ _SCALAR_SCHEMA: dict[str, dict[str, str]] = {
     "int": {"type": "integer"},
     "float": {"type": "number"},
     "bool": {"type": "boolean"},
+    "uuid": {"type": "string", "format": "uuid"},
+    "date": {"type": "string", "format": "date"},
+    "datetime": {"type": "string", "format": "date-time"},
 }
 
 #: HTTP methods that only read. Used to fill in MCP's tool annotations, which
@@ -38,6 +41,8 @@ class CapabilityError(Exception):
 
 def _param_schema(param) -> dict[str, Any]:
     schema: dict[str, Any] = dict(_SCALAR_SCHEMA[param.kind])
+    if param.repeated:
+        schema = {"type": "array", "items": schema}
     if param.optional:
         schema = {"anyOf": [schema, {"type": "null"}]}
     if param.presence == "omit":

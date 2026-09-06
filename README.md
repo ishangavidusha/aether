@@ -117,9 +117,13 @@ GET /users/abc   ->  422  {"detail": [{"type": "path_param_parsing", ...}]}
 DELETE /users/42 ->  405  Allow: GET
 ```
 
-Supported parameter types are `str`, `int`, `float` and `bool`. Anything else is
-a `TypeError` at import time, as is a path parameter the handler does not
-accept.
+Supported types are `str`, `int`, `float`, `bool`, `uuid.UUID`,
+`datetime.date` and `datetime.datetime`. Anything else is a `TypeError` at
+import time, as is a path parameter the handler does not accept.
+
+The richer three are validated in Rust and handed over as real Python objects,
+with proper calendar checking, so `2026-02-30` is a 422 rather than an exception
+inside a handler.
 
 ## Query parameters
 
@@ -136,9 +140,9 @@ async def search(_: Request, q: str, limit: int = 10, cursor: str | None = None)
 - A default makes it optional, and the handler's own default applies.
 - `str | None` without a default is optional and arrives as `None`.
 
-Booleans accept `true/false`, `1/0`, `yes/no` and `on/off`. A repeated key uses
-the first value; lists are not supported yet. Routes that declare no query
-parameters skip query-string parsing entirely.
+Booleans accept `true/false`, `1/0`, `yes/no` and `on/off`. Annotate a
+parameter `list[T]` to collect every occurrence of a key instead of the first.
+Routes that declare no query parameters skip query-string parsing entirely.
 
 A typed path parameter costs nothing measurable:
 
@@ -367,6 +371,19 @@ dicts and pydantic models alike, as JSON in a text frame. Ping and Pong are
 answered underneath and never reach the handler. Path and query parameters work
 exactly as they do on an ordinary route.
 
+Refuse a connection before the handshake with `authorize`, which the handler
+cannot do: by the time it runs the 101 has been sent and the client believes it
+is connected.
+
+```python
+async def members_only(request):
+    if not valid(request.header("authorization")):
+        return Response(b"nope", status=401)
+
+@app.websocket("/feed", authorize=members_only)
+async def feed(request, ws): ...
+```
+
 **A handler is cancelled when its peer disconnects.** That matters for the
 pattern this framework is built around:
 
@@ -593,6 +610,55 @@ async def me(req: Request):
 looks one up without building it. Headers stay in hyper's own map until Python
 wants them, so a handler that never reads one pays nothing.
 
+## Dependencies
+
+```python
+async def get_db(request):
+    db = await pool.acquire()
+    try:
+        yield db
+    finally:
+        await pool.release(db)          # runs after the handler, even on error
+
+@app.get("/users")
+async def list_users(_: Request, db = Depends(get_db)):
+    return await db.fetch("select ...")
+```
+
+A dependency is any callable. It may take the request or nothing, be sync or
+async, and declare dependencies of its own. Results are cached per request, so
+one shared by three others runs once. An async generator gets its teardown run
+after the handler returns, which is the reason this exists rather than calling a
+function at the top of every handler.
+
+## Sessions
+
+```python
+sessions = Sessions(secret=os.environ["SECRET_KEY"])
+app.middleware(sessions.middleware)
+
+@app.get("/count")
+async def count(_: Request, session = Depends(sessions.load)):
+    session["views"] = session.get("views", 0) + 1
+    return {"views": session["views"]}
+```
+
+The session is a dict in a signed cookie, rewritten only when the handler
+changed it. **Signed, not encrypted:** the client cannot forge or edit it, but
+can read it. Put an identifier in a session, not a password.
+
+## Logging
+
+Everything Aether reports goes through the standard `logging` module under the
+`aether` logger, so it lands wherever your application already sends its logs.
+Nothing is written to stderr directly.
+
+```python
+from aether import json_logging
+json_logging()                 # JSON lines
+app = App(access_log=True)     # one line per request, opt-in
+```
+
 ## Testing
 
 ```python
@@ -639,15 +705,10 @@ requests to finish before stopping.
 
 ## Known gaps
 
-- No cap on accepted connections; `max_concurrency` bounds handler slots, not
-  sockets.
-- A WebSocket cannot be rejected before the handshake completes, so there is no
-  auth hook, and middleware does not wrap socket routes.
-- No sessions, dependency injection, or auth helpers.
-- No structured logging; errors go to stderr as tracebacks.
-- Query parameters cannot be lists; a repeated key uses the first value.
-- No `UUID` or date parameter types yet.
+- Middleware does not wrap socket *handlers*, only their authorizer.
 - No TLS or HTTP/2; expects a terminating proxy in front.
+- MCP is POST/JSON only: no streaming responses, no server-to-client channel,
+  no resource subscriptions.
 
 ## Open questions
 

@@ -3,6 +3,9 @@
 import sys
 import threading
 
+import datetime
+import uuid
+
 import httpx
 
 from aether import App, Request
@@ -29,6 +32,27 @@ async def mixed(_: Request, group: str, page: int = 1):
     return {"group": group, "page": page}
 
 
+@app.get("/typed")
+async def typed(
+    _: Request,
+    ident: uuid.UUID,
+    day: datetime.date,
+    at: datetime.datetime | None = None,
+):
+    return {
+        "ident": str(ident),
+        "ident_type": type(ident).__name__,
+        "day": day.isoformat(),
+        "day_type": type(day).__name__,
+        "at": at.isoformat() if at else None,
+    }
+
+
+@app.get("/many")
+async def many(_: Request, tag: list[str], n: list[int] = []):
+    return {"tag": tag, "n": n, "n_types": sorted({type(v).__name__ for v in n})}
+
+
 @app.get("/ratio")
 async def ratio(_: Request, value: float = 0.5):
     return {"value": value}
@@ -53,6 +77,21 @@ CASES = [
     ("/ratio", 200, {"value": 0.5}),
     ("/ratio?value=2.25", 200, {"value": 2.25}),
     ("/ratio?value=nope", 422, None),
+    # UUID, date and datetime are validated in Rust, so a bad one never
+    # reaches a handler.
+    ("/typed?ident=f47ac10b-58cc-4372-a567-0e02b2c3d479&day=2026-09-06", 200,
+     {"ident_type": "UUID", "day_type": "date", "day": "2026-09-06"}),
+    ("/typed?ident=nope&day=2026-09-06", 422, None),
+    ("/typed?ident=f47ac10b-58cc-4372-a567-0e02b2c3d479&day=not-a-date", 422, None),
+    # A real calendar check, not a shape check.
+    ("/typed?ident=f47ac10b-58cc-4372-a567-0e02b2c3d479&day=2026-02-30", 422, None),
+    ("/typed?ident=f47ac10b-58cc-4372-a567-0e02b2c3d479&day=2026-09-06"
+     "&at=2026-09-06T14:30:00Z", 200, {"at": "2026-09-06T14:30:00+00:00"}),
+    # Repeated keys become a list rather than the first value winning.
+    ("/many?tag=a&tag=b&n=1&n=2", 200, {"tag": ["a", "b"], "n": [1, 2]}),
+    ("/many?tag=solo", 200, {"tag": ["solo"], "n": []}),
+    ("/many", 422, None),
+    ("/many?tag=a&n=x", 422, None),
 ]
 
 

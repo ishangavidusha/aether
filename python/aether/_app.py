@@ -5,7 +5,7 @@ from typing import Any
 
 from . import _openapi
 from ._response import Response
-from ._middleware import Reply, wrap as wrap_middleware
+from ._middleware import Reply, make_gate, wrap as wrap_middleware
 from ._routing import RouteInfo, build_route
 from ._streams import DROP_OLDEST, Topic
 from ._workers import default_workers, gil_enabled
@@ -14,6 +14,11 @@ from ._workers import default_workers, gil_enabled
 # before the server sheds load. Enough to absorb a burst of fast requests
 # without letting a slow handler build a backlog that every client outlives.
 DEFAULT_MAX_CONCURRENCY = 1024
+
+#: Sockets held open at once. Separate from `max_concurrency`, which bounds
+#: requests handed to a worker: an idle keep-alive connection costs a file
+#: descriptor without ever reaching one.
+DEFAULT_MAX_CONNECTIONS = 2048
 
 #: Seconds to wait for a handler's first response before answering 504. Zero
 #: disables it, for a service whose handlers are legitimately long-running.
@@ -36,6 +41,7 @@ class App:
         docs_url: str | None = "/docs",
         mcp_url: str | None = "/mcp",
         debug: bool = False,
+        access_log: bool = False,
         redis_url: str | None = None,
     ) -> None:
         """`openapi_url` and `docs_url` can each be set to None to disable them.
@@ -43,6 +49,9 @@ class App:
         `debug` returns handler exception text in the 500 response. Leave it off
         outside development: exception messages routinely carry connection
         strings, file paths and user data.
+
+        `access_log` adds one log line per request. Opt-in: it costs something
+        per request, and many deployments already log at the proxy.
 
         `redis_url` enables durable topics. Nothing connects until the first
         durable topic is used.
@@ -53,6 +62,11 @@ class App:
         """
         self.routes: list[RouteInfo] = []
         self._middleware: list[Any] = []
+        if access_log:
+            from ._logging import access_middleware
+
+            # First registered, so it wraps everything and sees the final status.
+            self._middleware.append(access_middleware)
         self._topics: dict[str, Topic] = {}
         self.title = title
         self.version = version
@@ -109,8 +123,21 @@ class App:
         self._middleware.append(fn)
         return fn
 
-    def websocket(self, path: str):
+    def websocket(self, path: str, authorize: Any = None):
         """Register a WebSocket endpoint.
+
+        `authorize` runs before the handshake and can refuse the upgrade,
+        which the handler cannot: by the time it runs, the 101 has been sent
+        and the client believes it is connected. Return None or True to
+        accept, or a `Response`/`Reply` to refuse.
+
+            async def members_only(request):
+                if not valid(request.header("authorization")):
+                    return Response(b"nope", status=401, content_type="text/plain")
+
+            @app.websocket("/ws", authorize=members_only)
+            async def feed(request, ws): ...
+        
 
         The handler takes the request and the socket. Aether performs the
         handshake, so the socket is already open when the handler runs, and the
@@ -123,7 +150,10 @@ class App:
         """
 
         def decorator(fn):
-            self.routes.append(build_route(fn, "GET", path, websocket=True))
+            route = build_route(fn, "GET", path, websocket=True)
+            if authorize is not None:
+                route.authorizer = make_gate(authorize)
+            self.routes.append(route)
             return fn
 
         return decorator
@@ -243,6 +273,7 @@ class App:
         max_body: int = DEFAULT_MAX_BODY,
         request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
         shutdown_grace: float = DEFAULT_SHUTDOWN_GRACE,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
     ) -> None:
         """Serve until interrupted.
 
@@ -262,10 +293,13 @@ class App:
 
         `shutdown_grace` is how long Ctrl-C waits for in-flight requests to
         finish before stopping anyway.
+
+        `max_connections` caps sockets held open. At the limit the server stops
+        accepting rather than refusing, so the wait lands in the OS backlog.
         """
         server = self.build_server(
             host, port, workers, max_concurrency, max_body, request_timeout,
-            shutdown_grace, announce=True,
+            shutdown_grace, max_connections, announce=True,
         )
         try:
             server.serve()
@@ -281,6 +315,7 @@ class App:
         max_body: int = DEFAULT_MAX_BODY,
         request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
         shutdown_grace: float = DEFAULT_SHUTDOWN_GRACE,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
         announce: bool = False,
     ):
         """Prepare a server without starting it.
@@ -314,6 +349,15 @@ class App:
                 else wrap_middleware(r.target, self._middleware),
                 [p.as_spec() for p in r.params],
                 r.websocket,
+                # Middleware wraps the authorizer too, so an app-wide auth rule
+                # covers sockets even though it cannot wrap the handler itself.
+                None
+                if r.authorizer is None
+                else (
+                    r.authorizer
+                    if not self._middleware
+                    else wrap_middleware(r.authorizer, self._middleware)
+                ),
             )
             for r in self.routes
         ]
@@ -326,6 +370,7 @@ class App:
             self.debug,
             request_timeout,
             shutdown_grace,
+            max_connections,
             not announce,
             specs,
         )

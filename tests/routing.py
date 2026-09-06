@@ -115,7 +115,7 @@ def registration_checks() -> list[str]:
         bad = App()
 
         @bad.get("/a/{x}")
-        async def h(_: Request, x: uuid.UUID):
+        async def h(_: Request, x: dict):
             return {}
 
     def sync_handler():
@@ -145,6 +145,19 @@ def registration_checks() -> list[str]:
     expect_error("sync handler", TypeError, sync_handler)
     expect_error("handler with no request arg", TypeError, no_request_arg)
     expect_error("typed wildcard", TypeError, typed_wildcard)
+
+    # UUID became a supported path type in M6; it used to be an error here.
+    try:
+        ok = App()
+
+        @ok.get("/a/{x}")
+        async def uuid_path(_: Request, x: uuid.UUID):
+            return {}
+
+        if ok.routes[0].params[0].kind != "uuid":
+            failures.append(f"UUID path param registered as {ok.routes[0].params[0].kind!r}")
+    except Exception as e:
+        failures.append(f"UUID path param rejected: {type(e).__name__}: {e}")
 
     # An annotated argument outside the path is a query parameter, not an error.
     # This changed when query binding landed; see tests/query.py for coverage.

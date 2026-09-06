@@ -52,12 +52,13 @@ pub struct Server {
     /// Lets something other than Ctrl-C stop the server. `serve` blocks, so a
     /// test harness needs a way in from another thread.
     stop: Arc<Notify>,
+    max_connections: usize,
     quiet: bool,
     routes: Vec<Route>,
 }
 
-/// (method, path, handler, [(name, type, source, presence)], is_websocket)
-type Route = (String, String, Py<PyAny>, Vec<SpecTuple>, bool);
+/// (method, path, handler, params, is_websocket, authorizer)
+type Route = (String, String, Py<PyAny>, Vec<SpecTuple>, bool, Option<Py<PyAny>>);
 
 #[pymethods]
 impl Server {
@@ -71,6 +72,7 @@ impl Server {
         debug: bool,
         request_timeout_secs: f64,
         shutdown_grace_secs: f64,
+        max_connections: usize,
         quiet: bool,
         routes: Vec<Route>,
     ) -> Self {
@@ -87,6 +89,7 @@ impl Server {
                 .then(|| Duration::from_secs_f64(request_timeout_secs)),
             shutdown_grace: Duration::from_secs_f64(shutdown_grace_secs.max(0.0)),
             stop: Arc::new(Notify::new()),
+            max_connections: max_connections.max(1),
             quiet,
             routes,
         }
@@ -104,15 +107,29 @@ impl Server {
         let handlers: Arc<Vec<Py<PyAny>>> = Arc::new(
             self.routes
                 .iter()
-                .map(|(_, _, handler, _, _)| handler.clone_ref(py))
+                .map(|(_, _, handler, _, _, _)| handler.clone_ref(py))
+                .collect(),
+        );
+
+        // Parallel to `handlers`: the optional pre-accept check for a socket.
+        let gates: Arc<Vec<Option<Py<PyAny>>>> = Arc::new(
+            self.routes
+                .iter()
+                .map(|(_, _, _, _, _, gate)| gate.as_ref().map(|g| g.clone_ref(py)))
                 .collect(),
         );
 
         let specs: Vec<RouteTuple> = self
             .routes
             .iter()
-            .map(|(method, path, _, params, websocket)| {
-                (method.clone(), path.clone(), params.clone(), *websocket)
+            .map(|(method, path, _, params, websocket, gate)| {
+                (
+                    method.clone(),
+                    path.clone(),
+                    params.clone(),
+                    *websocket,
+                    gate.is_some(),
+                )
             })
             .collect();
         let router = Arc::new(Router::build(&specs).map_err(PyValueError::new_err)?);
@@ -130,6 +147,7 @@ impl Server {
                 py,
                 i,
                 handlers.clone(),
+                gates.clone(),
                 router.clone(),
                 self.max_concurrency,
                 self.debug,
@@ -152,8 +170,9 @@ impl Server {
         let shutdown = state.clone();
         let stop = self.stop.clone();
         let quiet = self.quiet;
+        let slots = self.max_connections;
         let result: Result<(), String> =
-            py.detach(|| runtime.block_on(serve_loop(addr, state, stop, quiet)));
+            py.detach(|| runtime.block_on(serve_loop(addr, state, stop, slots, quiet)));
 
         // Draining. The listener has stopped, but connection tasks are still
         // on the runtime and handlers are still on the worker loops, so wait
@@ -190,6 +209,7 @@ async fn serve_loop(
     addr: SocketAddr,
     state: Arc<State>,
     stop: Arc<Notify>,
+    max_connections: usize,
     quiet: bool,
 ) -> Result<(), String> {
     let listener = TcpListener::bind(addr)
@@ -199,13 +219,32 @@ async fn serve_loop(
         println!("Aether listening on http://{addr}");
     }
 
+    // `max_concurrency` bounds requests handed to a worker, which is not the
+    // same as sockets held open. An idle keep-alive connection costs a file
+    // descriptor and buffers without ever reaching a worker, so it needs its
+    // own limit.
+    let connections = Arc::new(tokio::sync::Semaphore::new(max_connections));
+
     loop {
+        // Taken before accepting, so at the limit the listener simply stops
+        // accepting and the OS backlog absorbs the wait. That is the shape of
+        // backpressure a client understands.
+        let permit = tokio::select! {
+            slot = connections.clone().acquire_owned() => match slot {
+                Ok(permit) => permit,
+                Err(_) => break,
+            },
+            _ = stop.notified() => break,
+        };
+
         tokio::select! {
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { continue };
                 let _ = stream.set_nodelay(true);
                 let state = state.clone();
                 tokio::spawn(async move {
+                    // Released when the connection task ends.
+                    let _permit = permit;
                     let io = TokioIo::new(stream);
                     let svc = service_fn(move |req| handle(req, state.clone()));
                     // `with_upgrades` is required for 101 responses to hand
@@ -261,6 +300,24 @@ fn overloaded() -> Response<Out> {
         .header(RETRY_AFTER, "1")
         .body(full(Bytes::from_static(b"server overloaded")))
         .unwrap()
+}
+
+/// Path parameters are consumed by whichever Pending takes them, so the gate
+/// needs its own copy before the handler's.
+fn clone_param(value: &crate::router::ParamValue) -> crate::router::ParamValue {
+    use crate::router::ParamValue as V;
+    match value {
+        V::Str(v) => V::Str(v.clone()),
+        V::Int(v) => V::Int(*v),
+        V::Float(v) => V::Float(*v),
+        V::Bool(v) => V::Bool(*v),
+        V::Uuid(v) => V::Uuid(v.clone()),
+        V::Date(v) => V::Date(v.clone()),
+        V::DateTime(v) => V::DateTime(v.clone()),
+        V::List(items) => V::List(items.iter().map(clone_param).collect()),
+        V::Null => V::Null,
+        V::Omit => V::Omit,
+    }
 }
 
 fn too_large() -> Response<Out> {
@@ -334,6 +391,62 @@ async fn upgrade_websocket(
             .unwrap();
     };
 
+    // Ask the application before switching protocols. Once the 101 is sent it
+    // is too late to refuse, which is why this cannot be left to the handler.
+    if state.router.spec(matched.route).gated {
+        let (verdict_tx, verdict_rx) = oneshot::channel::<Reply>();
+        let queued = enqueue(
+            &state,
+            Pending {
+                route: matched.route,
+                params: matched.params.iter().map(clone_param).collect(),
+                method: req.method().as_str().to_owned(),
+                path: req.uri().path().to_owned(),
+                query: req.uri().query().map(str::to_owned),
+                body: Vec::new(),
+                headers: req.headers().clone(),
+                reply: verdict_tx,
+                websocket: None,
+                gate: true,
+            },
+        );
+        if !queued {
+            return overloaded();
+        }
+
+        let verdict = match state.request_timeout {
+            Some(limit) => match tokio::time::timeout(limit, verdict_rx).await {
+                Ok(result) => result,
+                Err(_) => return plain(StatusCode::GATEWAY_TIMEOUT, "authorizer timed out"),
+            },
+            None => verdict_rx.await,
+        };
+
+        match verdict {
+            // 101 from the authorizer means "go ahead"; the real handshake
+            // response is built below.
+            Ok(reply) if reply.status == 101 => {}
+            Ok(reply) => {
+                let body = match reply.body {
+                    Body::Full(bytes) => Bytes::from(bytes),
+                    Body::Stream(..) => Bytes::new(),
+                };
+                let mut builder = Response::builder()
+                    .status(reply.status)
+                    .header(CONTENT_TYPE, reply.content_type);
+                for (name, value) in &reply.headers {
+                    builder = builder.header(name.as_str(), value.as_str());
+                }
+                return builder
+                    .body(full(body))
+                    .unwrap_or_else(|_| plain(StatusCode::FORBIDDEN, "refused"));
+            }
+            Err(_) => {
+                return plain(StatusCode::INTERNAL_SERVER_ERROR, "authorizer did not answer")
+            }
+        }
+    }
+
     let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes());
     let (shared, outgoing) = websocket::Shared::new();
 
@@ -354,6 +467,7 @@ async fn upgrade_websocket(
             headers: req.headers().clone(),
             reply: reply_tx,
             websocket: Some(shared.clone()),
+            gate: false,
         },
     );
     if !queued {
@@ -445,6 +559,7 @@ async fn handle(
         headers,
         reply: reply_tx,
         websocket: None,
+        gate: false,
     };
 
     // No Python involvement on this thread: plain Rust data plus one byte

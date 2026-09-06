@@ -36,6 +36,9 @@ pub struct Pending {
     /// Set for an upgraded connection. The handler gets a socket instead of
     /// producing a reply, since the 101 has already gone out.
     pub websocket: Option<std::sync::Arc<Shared>>,
+    /// Run this route's authorizer rather than its handler, and answer with
+    /// its verdict. Used to decide an upgrade before the handshake.
+    pub gate: bool,
 }
 
 pub struct WorkerQueue {

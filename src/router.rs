@@ -11,6 +11,18 @@
 use std::collections::HashMap;
 
 use matchit::Router as Matcher;
+use time::format_description::well_known::Iso8601;
+use time::macros::format_description;
+
+const ISO: Iso8601 = Iso8601::DEFAULT;
+/// Output shapes Python's own `fromisoformat` always accepts.
+const ISO_DATE: &[time::format_description::BorrowedFormatItem<'_>] =
+    format_description!("[year]-[month]-[day]");
+const ISO_NAIVE: &[time::format_description::BorrowedFormatItem<'_>] =
+    format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
+const ISO_OFFSET: &[time::format_description::BorrowedFormatItem<'_>] = format_description!(
+    "[year]-[month]-[day]T[hour]:[minute]:[second][offset_hour sign:mandatory]:[offset_minute]"
+);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ParamKind {
@@ -18,6 +30,12 @@ pub enum ParamKind {
     Int,
     Float,
     Bool,
+    /// Validated here, built into a Python object on the worker thread. The
+    /// alternative, handing Python a string and letting its constructor fail,
+    /// would turn a malformed id into a 500 instead of a 422.
+    Uuid,
+    Date,
+    DateTime,
 }
 
 impl ParamKind {
@@ -27,6 +45,9 @@ impl ParamKind {
             "int" => Some(Self::Int),
             "float" => Some(Self::Float),
             "bool" => Some(Self::Bool),
+            "uuid" => Some(Self::Uuid),
+            "date" => Some(Self::Date),
+            "datetime" => Some(Self::DateTime),
             _ => None,
         }
     }
@@ -37,6 +58,9 @@ impl ParamKind {
             Self::Int => "integer",
             Self::Float => "number",
             Self::Bool => "boolean",
+            Self::Uuid => "UUID",
+            Self::Date => "date in YYYY-MM-DD form",
+            Self::DateTime => "ISO 8601 datetime",
         }
     }
 }
@@ -93,6 +117,14 @@ pub enum ParamValue {
     Int(i64),
     Float(f64),
     Bool(bool),
+    /// Validated here; the worker turns it into `uuid.UUID`.
+    Uuid(String),
+    /// Validated here; the worker turns it into `datetime.date`.
+    Date(String),
+    /// Validated here; the worker turns it into `datetime.datetime`.
+    DateTime(String),
+    /// A repeated query parameter.
+    List(Vec<ParamValue>),
     /// Set the key to None.
     Null,
     /// Do not set the key at all.
@@ -104,6 +136,8 @@ pub struct ParamSpec {
     kind: ParamKind,
     source: Source,
     presence: Presence,
+    /// Collect every occurrence rather than the first, for `list[T]`.
+    repeated: bool,
 }
 
 pub struct RouteSpec {
@@ -112,6 +146,8 @@ pub struct RouteSpec {
     has_query: bool,
     /// Handled by the upgrade path rather than the ordinary reply path.
     pub websocket: bool,
+    /// Has an authorizer that must approve the upgrade first.
+    pub gated: bool,
 }
 
 /// A parameter that was missing or would not coerce. Rendered in the shape
@@ -153,11 +189,11 @@ pub struct Matched {
     pub params: Vec<ParamValue>,
 }
 
-/// (name, type, source, presence), all as strings from the Python side.
-pub type SpecTuple = (String, String, String, String);
+/// (name, type, source, presence, repeated) from the Python side.
+pub type SpecTuple = (String, String, String, String, bool);
 
-/// (method, path, params, is_websocket)
-pub type RouteTuple = (String, String, Vec<SpecTuple>, bool);
+/// (method, path, params, is_websocket, has_authorizer)
+pub type RouteTuple = (String, String, Vec<SpecTuple>, bool, bool);
 
 pub struct Router {
     by_method: HashMap<String, Matcher<usize>>,
@@ -170,13 +206,14 @@ impl Router {
         let mut by_method: HashMap<String, Matcher<usize>> = HashMap::new();
         let mut specs = Vec::with_capacity(routes.len());
 
-        for (index, (method, path, params, websocket)) in routes.iter().enumerate() {
+        for (index, (method, path, params, websocket, gated)) in routes.iter().enumerate() {
             let mut spec = RouteSpec {
                 params: Vec::new(),
                 has_query: false,
                 websocket: *websocket,
+                gated: *gated,
             };
-            for (name, kind, source, presence) in params {
+            for (name, kind, source, presence, repeated) in params {
                 let kind = ParamKind::parse(kind)
                     .ok_or_else(|| format!("unsupported parameter type {kind:?} for {name:?}"))?;
                 let source = Source::parse(source)
@@ -189,6 +226,7 @@ impl Router {
                     kind,
                     source,
                     presence,
+                    repeated: *repeated,
                 });
             }
             specs.push(spec);
@@ -240,9 +278,35 @@ impl Router {
 
         let mut params = Vec::with_capacity(spec.params.len());
         for param in &spec.params {
+            if param.repeated {
+                // Every occurrence, in the order the client sent them.
+                let mut items = Vec::new();
+                for (key, value) in &pairs {
+                    if key == &param.name {
+                        items.push(coerce(value, param).map_err(RouteError::BadParam)?);
+                    }
+                }
+                params.push(match (items.is_empty(), param.presence) {
+                    (true, Presence::Required) => {
+                        return Err(RouteError::BadParam(ParamError {
+                            source: param.source.label(),
+                            name: param.name.clone(),
+                            error_type: "missing",
+                            msg: "Field required".to_owned(),
+                            input: None,
+                        }))
+                    }
+                    (true, Presence::Omit) => ParamValue::Omit,
+                    (true, Presence::Null) => ParamValue::Null,
+                    _ => ParamValue::List(items),
+                });
+                continue;
+            }
+
             let raw = match param.source {
                 Source::Path => found.params.get(&param.name),
-                // First wins on a repeated key. Lists are not supported yet.
+                // First wins on a repeated key unless the handler asked for a
+                // list, which is what `repeated` above handles.
                 Source::Query => pairs
                     .iter()
                     .find(|(k, _)| k == &param.name)
@@ -314,5 +378,28 @@ fn coerce(raw: &str, param: &ParamSpec) -> Result<ParamValue, ParamError> {
             "false" | "False" | "0" | "no" | "off" => Ok(ParamValue::Bool(false)),
             _ => Err(bad()),
         },
+        // Canonicalised, not passed through. Rust accepts forms Python's
+        // constructors might not, and a value that parsed here must never
+        // raise there: that would be a 500 for input already judged valid.
+        ParamKind::Uuid => uuid::Uuid::try_parse(raw)
+            .map(|parsed| ParamValue::Uuid(parsed.hyphenated().to_string()))
+            .map_err(|_| bad()),
+        // Parsed properly rather than shape-checked, so 2026-02-30 is rejected
+        // here instead of raising inside a handler.
+        ParamKind::Date => time::Date::parse(raw, &ISO)
+            .ok()
+            .and_then(|date| date.format(&ISO_DATE).ok())
+            .map(ParamValue::Date)
+            .ok_or_else(bad),
+        ParamKind::DateTime => time::OffsetDateTime::parse(raw, &ISO)
+            .ok()
+            .and_then(|at| at.format(&ISO_OFFSET).ok())
+            .or_else(|| {
+                time::PrimitiveDateTime::parse(raw, &ISO)
+                    .ok()
+                    .and_then(|at| at.format(&ISO_NAIVE).ok())
+            })
+            .map(ParamValue::DateTime)
+            .ok_or_else(bad),
     }
 }

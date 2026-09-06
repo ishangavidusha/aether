@@ -45,6 +45,7 @@ verify: build-ft
 	.venv/bin/python tests/websocket.py
 	.venv/bin/python tests/hardening.py
 	.venv/bin/python tests/plumbing.py
+	.venv/bin/python tests/injection.py
 	.venv/bin/python tests/durable.py
 	.venv/bin/python tests/backpressure.py
 	.venv/bin/python tests/verify.py
@@ -61,6 +62,7 @@ verify-gil: build-gil
 	.venv-gil/bin/python tests/websocket.py
 	.venv-gil/bin/python tests/hardening.py
 	.venv-gil/bin/python tests/plumbing.py
+	.venv-gil/bin/python tests/injection.py
 	.venv-gil/bin/python tests/durable.py
 	.venv-gil/bin/python tests/backpressure.py
 	.venv-gil/bin/python tests/verify.py

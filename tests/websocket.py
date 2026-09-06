@@ -8,7 +8,7 @@ import httpx
 import websockets
 from pydantic import BaseModel
 
-from aether import App, Request
+from aether import App, Request, Response
 
 PORT = 8805
 BASE = f"http://127.0.0.1:{PORT}"
@@ -60,6 +60,18 @@ async def counted(_: Request, ws):
     # Reached only after the client closes, which is what makes it a useful
     # check that a peer close ends iteration.
     app.topic("closed").emit_nowait("done")
+
+
+async def members_only(request: Request):
+    """Refuses before the handshake, which the handler cannot do: by the time
+    it runs the 101 has been sent and the client believes it is connected."""
+    if request.header("authorization") != "Bearer good":
+        return Response(b'{"error":"unauthorized"}', status=401)
+
+
+@app.websocket("/private", authorize=members_only)
+async def private(_: Request, ws):
+    await ws.send("welcome")
 
 
 @app.post("/publish/{text}")
@@ -144,6 +156,22 @@ async def run() -> list[str]:
     finally:
         for ws in sockets:
             await ws.close()
+
+    # An authorizer must be able to refuse an upgrade outright.
+    try:
+        async with websockets.connect(f"{WS}/private"):
+            bad.append("an unauthorized socket was accepted")
+    except Exception as exc:  # noqa: BLE001
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status != 401:
+            bad.append(f"refused socket gave {type(exc).__name__} {status}, expected 401")
+
+    async with websockets.connect(
+        f"{WS}/private", additional_headers={"Authorization": "Bearer good"}
+    ) as ws:
+        greeting = await asyncio.wait_for(ws.recv(), 5)
+        if greeting != "welcome":
+            bad.append(f"authorized socket received {greeting!r}")
 
     # Subscriptions must be released when sockets go away.
     for _ in range(100):

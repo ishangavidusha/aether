@@ -79,6 +79,36 @@ def wrap(handler: Any, middlewares: list[Any]) -> Any:
     return dispatch
 
 
+#: What an authorizer returns to mean "accept". Never reaches a client: the
+#: server builds the real handshake response itself.
+ACCEPT_STATUS = 101
+
+
+def make_gate(authorize: Any) -> Any:
+    """Turn an authorizer into something the normal reply path can carry.
+
+    Accepting is signalled as a 101 because the upgrade decision has to travel
+    back through the same channel an ordinary response uses.
+    """
+    from ._response import Response
+
+    async def gate(request, **params):
+        verdict = authorize(request)
+        if hasattr(verdict, "__await__"):
+            verdict = await verdict
+        if verdict is None or verdict is True:
+            return Response(b"", status=ACCEPT_STATUS, content_type="text/plain")
+        if isinstance(verdict, Reply):
+            return verdict
+        if isinstance(verdict, Response):
+            return verdict
+        # A falsy verdict with no detail still has to mean "no".
+        return Response(b"forbidden", status=403, content_type="text/plain")
+
+    gate.__name__ = getattr(authorize, "__name__", "authorize")
+    return gate
+
+
 def merge(reply: Reply) -> tuple[Any, int | None, list[tuple[str, str]] | None]:
     """Fold a Reply into (value, status override, extra headers).
 

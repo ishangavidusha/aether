@@ -260,6 +260,39 @@ def graceful_shutdown() -> None:
     check(drain >= 0.4, f"shutdown returned in {drain:.2f}s, so it did not wait")
 
 
+def connection_cap() -> None:
+    """More sockets than the cap must queue, not fail.
+
+    `max_concurrency` bounds requests handed to a worker; an idle keep-alive
+    connection never reaches one, so it needs its own limit.
+    """
+    import concurrent.futures
+
+    import httpx
+
+    app = App(openapi_url=None, docs_url=None, mcp_url=None)
+
+    @app.get("/ok")
+    async def ok(_: Request):
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    with TestClient(app, max_connections=2, timeout=30) as c:
+        def one(_):
+            # A fresh connection each time, so the cap is what is under test
+            # rather than a shared pool.
+            with httpx.Client(base_url=c.base_url, timeout=30) as client:
+                return client.get("/ok").status_code
+
+        with concurrent.futures.ThreadPoolExecutor(10) as pool:
+            codes = list(pool.map(one, range(10)))
+
+    check(
+        codes == [200] * 10,
+        f"a cap of 2 should queue the rest, not fail them: {sorted(codes)}",
+    )
+
+
 # --------------------------------------------------------------------------
 def test_client_transports() -> None:
     from aether import SSE
@@ -314,6 +347,7 @@ def main() -> None:
         timeout_does_not_cut_streams,
         streams_release_their_slot,
         graceful_shutdown,
+        connection_cap,
         test_client_transports,
     ]
     for step in steps:

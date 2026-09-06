@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread;
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 
 use crate::queue::WorkerQueue;
 use crate::request::Request;
@@ -21,11 +21,16 @@ use crate::websocket::WebSocket;
 struct Drainer {
     queue: Arc<WorkerQueue>,
     routes: Arc<Vec<Py<PyAny>>>,
+    gates: Arc<Vec<Option<Py<PyAny>>>>,
     router: Arc<Router>,
     /// `aether._runtime.run_handler`, an async function.
     run_handler: Py<PyAny>,
     /// `aether._runtime.run_websocket`, for upgraded connections.
     run_websocket: Py<PyAny>,
+    /// Constructors for parameter types Rust validated but cannot build.
+    make_uuid: Py<PyAny>,
+    make_date: Py<PyAny>,
+    make_datetime: Py<PyAny>,
     /// Bound `loop.create_task`.
     create_task: Py<PyAny>,
     /// Returned to the client in a 500 when set. Per server, never global.
@@ -34,6 +39,32 @@ struct Drainer {
     reader: UnixStream,
     /// Handed to each `Responder` so streams can watch for disconnects.
     runtime: tokio::runtime::Handle,
+}
+
+impl Drainer {
+    /// Turn a coerced parameter into a Python object.
+    ///
+    /// The constructors are looked up once, at worker start, rather than per
+    /// request.
+    fn to_python<'py>(&self, py: Python<'py>, value: ParamValue) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ParamValue::Str(v) => v.into_pyobject(py)?.into_any(),
+            ParamValue::Int(v) => v.into_pyobject(py)?.into_any(),
+            ParamValue::Float(v) => v.into_pyobject(py)?.into_any(),
+            ParamValue::Bool(v) => v.into_pyobject(py)?.to_owned().into_any(),
+            ParamValue::Uuid(v) => self.make_uuid.bind(py).call1((v,))?,
+            ParamValue::Date(v) => self.make_date.bind(py).call1((v,))?,
+            ParamValue::DateTime(v) => self.make_datetime.bind(py).call1((v,))?,
+            ParamValue::List(items) => {
+                let list = PyList::empty(py);
+                for item in items {
+                    list.append(self.to_python(py, item)?)?;
+                }
+                list.into_any()
+            }
+            ParamValue::Null | ParamValue::Omit => py.None().into_bound(py),
+        })
+    }
 }
 
 #[pymethods]
@@ -55,7 +86,10 @@ impl Drainer {
 
         while let Some(item) = self.queue.pop() {
             self.queue.claim();
-            let handler = self.routes[item.route].bind(py);
+            let handler = match (item.gate, self.gates[item.route].as_ref()) {
+                (true, Some(gate)) => gate.bind(py),
+                _ => self.routes[item.route].bind(py),
+            };
             let spec = self.router.spec(item.route);
 
             // Handlers with no path parameters skip the dict entirely, so the
@@ -66,13 +100,9 @@ impl Drainer {
                 let dict = PyDict::new(py);
                 for (param, value) in spec.params.iter().zip(item.params) {
                     match value {
-                        ParamValue::Str(v) => dict.set_item(&param.name, v)?,
-                        ParamValue::Int(v) => dict.set_item(&param.name, v)?,
-                        ParamValue::Float(v) => dict.set_item(&param.name, v)?,
-                        ParamValue::Bool(v) => dict.set_item(&param.name, v)?,
-                        ParamValue::Null => dict.set_item(&param.name, py.None())?,
                         // Left out on purpose: the handler's own default applies.
                         ParamValue::Omit => {}
+                        other => dict.set_item(&param.name, self.to_python(py, other)?)?,
                     }
                 }
                 Some(dict)
@@ -121,6 +151,7 @@ impl Worker {
         py: Python<'_>,
         index: usize,
         routes: Arc<Vec<Py<PyAny>>>,
+        gates: Arc<Vec<Option<Py<PyAny>>>>,
         router: Arc<Router>,
         limit: usize,
         debug: bool,
@@ -144,9 +175,13 @@ impl Worker {
                         let drainer = Drainer {
                             queue: worker_queue,
                             routes,
+                            gates,
                             router,
                             run_handler: runtime.getattr("run_handler")?.unbind(),
                             run_websocket: runtime.getattr("run_websocket")?.unbind(),
+                            make_uuid: runtime.getattr("make_uuid")?.unbind(),
+                            make_date: runtime.getattr("make_date")?.unbind(),
+                            make_datetime: runtime.getattr("make_datetime")?.unbind(),
                             create_task: event_loop.getattr("create_task")?.unbind(),
                             debug,
                             reader: read_end,

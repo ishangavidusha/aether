@@ -19,6 +19,9 @@ _SCALAR_SCHEMA: dict[Any, dict[str, str]] = {
     "int": {"type": "integer"},
     "float": {"type": "number"},
     "bool": {"type": "boolean"},
+    "uuid": {"type": "string", "format": "uuid"},
+    "date": {"type": "string", "format": "date"},
+    "datetime": {"type": "string", "format": "date-time"},
 }
 
 _REF_TEMPLATE = "#/components/schemas/{model}"
@@ -62,6 +65,8 @@ def _register_model(model: Any, components: dict[str, Any]) -> dict[str, str]:
 
 def _parameter(param, components: dict[str, Any]) -> dict[str, Any]:
     schema: dict[str, Any] = dict(_SCALAR_SCHEMA[param.kind])
+    if param.repeated:
+        schema = {"type": "array", "items": schema}
     if param.optional:
         schema = {"anyOf": [schema, {"type": "null"}]}
     if param.presence == "omit":

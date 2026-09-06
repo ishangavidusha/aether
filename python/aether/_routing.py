@@ -12,14 +12,17 @@ Everything here runs once, at registration. Mistakes surface at import time with
 a message naming the handler, rather than as a confusing 500 later.
 """
 
+import datetime as _datetime
 import inspect
 import re
 import types
 import typing
+import uuid as _uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ._depends import Depends, bind as bind_dependencies, declared
 from ._schema import (
     HAVE_PYDANTIC,
     RequestValidationError,
@@ -33,8 +36,19 @@ from ._schema import (
 _PLACEHOLDER = re.compile(r"\{(\*?)([A-Za-z_][A-Za-z0-9_]*)\}")
 
 # Types the Rust side knows how to coerce. Keep in sync with ParamKind in
-# src/router.rs.
-_SUPPORTED: dict[Any, str] = {str: "str", int: "int", float: "float", bool: "bool"}
+# src/router.rs. The richer three are validated in Rust and built into Python
+# objects on the worker thread.
+_SUPPORTED: dict[Any, str] = {
+    str: "str",
+    int: "int",
+    float: "float",
+    bool: "bool",
+    _uuid.UUID: "uuid",
+    # datetime is a subclass of date, so order matters only to a reader; the
+    # lookup is by exact type.
+    _datetime.datetime: "datetime",
+    _datetime.date: "date",
+}
 
 _EMPTY = inspect.Parameter.empty
 
@@ -48,10 +62,12 @@ class ParamInfo:
     annotation: Any = str
     default: Any = None
     optional: bool = False
+    repeated: bool = False
+    """`list[T]`: collect every occurrence rather than the first."""
 
-    def as_spec(self) -> tuple[str, str, str, str]:
-        """The 4-tuple the Rust router expects."""
-        return (self.name, self.kind, self.source, self.presence)
+    def as_spec(self) -> tuple[str, str, str, str, bool]:
+        """The tuple the Rust router expects."""
+        return (self.name, self.kind, self.source, self.presence, self.repeated)
 
 
 @dataclass(slots=True)
@@ -64,10 +80,13 @@ class RouteInfo:
     """What actually runs, which wraps `fn` when there is a body to validate."""
     params: list[ParamInfo] = field(default_factory=list)
     body: tuple[str, Any] | None = None
+    dependencies: dict[str, Any] = field(default_factory=dict)
     response_model: Any = None
     summary: str = ""
     description: str = ""
     websocket: bool = False
+    authorizer: Any = None
+    """Runs before the handshake; may refuse the upgrade."""
     tool: bool = False
     """Exposed to agents over MCP. Opt-in, never the default."""
 
@@ -84,6 +103,16 @@ def _annotations(fn: Callable[..., Any]) -> dict[str, Any]:
         # A forward reference we cannot resolve should not break registration;
         # unannotated parameters fall back to str.
         return dict(getattr(fn, "__annotations__", {}))
+
+
+def _unwrap_list(annotation: Any) -> tuple[Any, bool]:
+    """`list[int]` -> (int, True). A bare `list` is rejected: without an item
+    type there is nothing to coerce to."""
+    if typing.get_origin(annotation) is list:
+        args = typing.get_args(annotation)
+        if len(args) == 1:
+            return args[0], True
+    return annotation, False
 
 
 def _unwrap_optional(annotation: Any) -> tuple[Any, bool]:
@@ -112,6 +141,16 @@ def bind_body(fn: Callable[..., Any], name: str, model: Any) -> Callable[..., An
     handler.__name__ = getattr(fn, "__name__", "handler")
     handler.__qualname__ = getattr(fn, "__qualname__", "handler")
     return handler
+
+
+def _build_target(fn: Callable[..., Any], body: Any, dependencies: dict) -> Callable[..., Any]:
+    """Layer body validation and dependency resolution around the handler.
+
+    Dependencies resolve outside body validation, so a dependency that opens a
+    resource still tears it down when the body turns out to be invalid.
+    """
+    target = fn if body is None else bind_body(fn, *body)
+    return target if not dependencies else bind_dependencies(target, dependencies)
 
 
 def build_route(
@@ -184,10 +223,16 @@ def build_route(
             ParamInfo(name, kind, "path", "required", annotation=annotation)
         )
 
-    # Anything left is a query parameter, or the body if it is a pydantic model.
+    # Anything left is a query parameter, the body if it is a pydantic model,
+    # or a dependency if its default says so.
     body: tuple[str, Any] | None = None
+    dependencies: dict[str, Depends] = {}
     for name, param in accepted.items():
         if name in set(names):
+            continue
+
+        if isinstance(param.default, Depends):
+            dependencies[name] = param.default
             continue
         annotation = hints.get(name, _EMPTY)
 
@@ -212,6 +257,7 @@ def build_route(
             )
 
         base, optional = _unwrap_optional(annotation)
+        base, repeated = _unwrap_list(base)
         kind = _SUPPORTED.get(base)
         if kind is None:
             extra = (
@@ -243,6 +289,7 @@ def build_route(
                 annotation=base,
                 default=None if param.default is _EMPTY else param.default,
                 optional=optional,
+                repeated=repeated,
             )
         )
 
@@ -257,9 +304,10 @@ def build_route(
         method=method,
         path=path,
         fn=fn,
-        target=fn if body is None else bind_body(fn, *body),
+        target=_build_target(fn, body, dependencies),
         params=params,
         body=body,
+        dependencies=dependencies,
         response_model=response_model,
         summary=summary.strip().replace("\n", " "),
         description=description.strip(),

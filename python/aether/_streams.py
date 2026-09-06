@@ -27,10 +27,11 @@ naturally, the same principle that made request dispatch fast.
 """
 
 import asyncio
-import sys
 import threading
 from collections import deque
 from typing import Any
+
+from ._logging import logger
 
 #: Drop the oldest buffered message. A slow subscriber loses history rather
 #: than stalling every producer. The default.
@@ -252,9 +253,7 @@ class Topic:
             try:
                 async for _entry_id, value in self.backend.tail(self.name):
                     if broken:
-                        print(
-                            f"aether: topic {self.name!r} reconnected", file=sys.stderr
-                        )
+                        logger.info("topic reconnected", extra={"topic": self.name})
                         broken = False
                     self._fan_out(value)
                     delay = 0.5
@@ -264,10 +263,9 @@ class Topic:
                 # One line per outage, not per attempt: a full traceback every
                 # half second during a Redis restart buries everything else.
                 if not broken:
-                    print(
-                        f"aether: topic {self.name!r} lost its backend "
-                        f"({type(exc).__name__}: {exc}); retrying",
-                        file=sys.stderr,
+                    logger.warning(
+                        "topic lost its backend, retrying",
+                        extra={"topic": self.name, "error": f"{type(exc).__name__}: {exc}"},
                     )
                     broken = True
                 await asyncio.sleep(delay)
