@@ -43,8 +43,15 @@ jobs:
           --health-timeout 3s
           --health-retries 10
 
+    timeout-minutes: 20
+
     env:
       AETHER_TEST_REDIS: redis://127.0.0.1:6379
+      # Without this, prints are block-buffered and a hung suite leaves a log
+      # that stops mid-way through the *previous* suite.
+      PYTHONUNBUFFERED: "1"
+      # No single suite takes more than a few seconds. Five minutes is a hang.
+      SUITE_TIMEOUT: timeout 300
       # Turns tests/durable.py's SKIP into a failure. A green run that never
       # touched milestone 4 is the thing this workflow exists to prevent.
       AETHER_REQUIRE_REDIS: "1"

@@ -40,11 +40,16 @@ bench-cpu-gil: build-gil
 SUITES := workers routing query bodies openapi capabilities streams sse \
           websocket hardening plumbing injection durable backpressure verify
 
+# SUITE_TIMEOUT is empty locally and set to `timeout 300` in CI, where a hung
+# suite would otherwise burn the whole job. Echo the name first: a suite that
+# hangs before its own first print is otherwise invisible in a CI log.
+SUITE_TIMEOUT ?=
+
 verify: build-ft
-	@for s in $(SUITES); do .venv/bin/python tests/$$s.py || exit 1; done
+	@for s in $(SUITES); do echo "== $$s"; $(SUITE_TIMEOUT) .venv/bin/python tests/$$s.py || exit 1; done
 
 verify-gil: build-gil
-	@for s in $(SUITES); do .venv-gil/bin/python tests/$$s.py || exit 1; done
+	@for s in $(SUITES); do echo "== $$s"; $(SUITE_TIMEOUT) .venv-gil/bin/python tests/$$s.py || exit 1; done
 
 # Branch coverage of the Python half. COVERAGE_CORE=sysmon matters: handlers run
 # on threads Rust created, which the classic trace hook never sees, and the
@@ -53,8 +58,8 @@ COVERAGE_MIN := 85
 
 coverage: build-ft
 	@rm -f .coverage .coverage.[0-9]* 2>/dev/null || true
-	@for s in $(SUITES); do \
-		COVERAGE_CORE=sysmon .venv/bin/python -m coverage run --branch -p \
+	@for s in $(SUITES); do echo "== $$s"; \
+		COVERAGE_CORE=sysmon $(SUITE_TIMEOUT) .venv/bin/python -m coverage run --branch -p \
 			--source=python/aether tests/$$s.py || exit 1; \
 	done
 	@.venv/bin/python -m coverage combine -q
