@@ -54,6 +54,20 @@ event loop, and therefore the number to watch when this design changes. The
 FastAPI rows answer a different question, since they include a framework doing
 framework work.
 
+The same benchmark on the standard GIL build, where the default is one worker
+loop:
+
+| target | req/s | p50 ms | p99 ms |
+|---|---:|---:|---:|
+| Aether, 1 loop | 192,054 | 0.33 | 0.54 |
+| granian raw ASGI | 128,733 | 0.50 | 0.78 |
+| granian + FastAPI | 35,238 | 1.79 | 2.20 |
+| uvicorn + FastAPI | 11,572 | 5.55 | 5.72 |
+
+Dispatch is not what free-threading buys. A single loop performs the same on
+either build; what the free-threaded build adds is the ability to run several
+loops usefully, which matters once handlers do work.
+
 ## What the design was worth
 
 Dispatch was rewritten from `call_soon_threadsafe` per request to a lock-free
