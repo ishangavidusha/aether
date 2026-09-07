@@ -133,6 +133,10 @@ without ever touching the interpreter. It writes one byte to a socketpair only
 if no wakeup is already in flight, so a burst of requests collapses into a
 single wakeup. See [internals](www/design/internals.md).
 
+## License
+
+MIT. See [LICENSE](LICENSE).
+
 ## Known gaps
 
 - No TLS and no HTTP/2. Expects a terminating proxy in front.
