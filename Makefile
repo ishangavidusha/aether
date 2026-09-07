@@ -2,7 +2,7 @@
 FT_PY  := 3.14.7+freethreaded
 GIL_PY := /opt/homebrew/bin/python3.14
 
-.PHONY: venvs build build-ft build-gil docs docs-serve run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil verify verify-gil up down logs image stack stack-down clean
+.PHONY: venvs build build-ft build-gil docs docs-serve notes run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil verify verify-gil up down logs image stack stack-down clean
 
 venvs:
 	uv venv --python $(FT_PY) .venv
@@ -68,6 +68,11 @@ verify-gil: build-gil
 	.venv-gil/bin/python tests/durable.py
 	.venv-gil/bin/python tests/backpressure.py
 	.venv-gil/bin/python tests/verify.py
+
+# Internal notes live in docs/, which is not committed. This checks their IDs
+# are unique and every citation resolves, and prints the next free ID.
+notes:
+	python3 tools/check_notes.py
 
 # --- public documentation ---------------------------------------------------
 # Built from the GIL venv, which is where the docs tooling lives. mkdocstrings
