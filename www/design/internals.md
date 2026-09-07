@@ -98,7 +98,7 @@ topic, which has nothing to write and therefore nothing that would fail.
 
 ## Testing
 
-Fifteen standalone scripts under `tests/`, each exiting non-zero on failure,
+Sixteen standalone scripts under `tests/`, each exiting non-zero on failure,
 run against a real server on a real socket.
 
 ```bash

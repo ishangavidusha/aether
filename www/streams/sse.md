@@ -35,8 +35,20 @@ from aether import Event
 yield Event({"price": 42}, event="tick", id="1051", retry=3000)
 ```
 
-A payload containing newlines becomes several `data:` lines, as the wire format
-requires — a raw newline would otherwise end the event early.
+A payload containing line breaks becomes several `data:` lines, as the wire
+format requires — a raw break would otherwise end the event early. Carriage
+returns count: a client ends a line at `\r`, `\n` or `\r\n` alike.
+
+!!! warning "`event` and `id` reject line breaks"
+
+    Both raise `ValueError` if given a value containing `\r`, `\n` or a NUL,
+    and the error is raised when the `Event` is built rather than when it is
+    written.
+
+    This matters when an id comes from user data. The format has no escape for
+    a line break inside a field, so a value carrying one does not produce an
+    odd-looking id — it ends the event and everything after it is parsed as
+    further events the application never sent.
 
 ## Keep-alive
 

@@ -100,8 +100,22 @@ async def pump_sse(sse, responder):
                 except StopAsyncIteration:
                     pending = None
                     break
+                except Exception as exc:  # noqa: BLE001
+                    # A source that raises mid-stream ends it, and says so.
+                    logger.exception("sse source raised", exc_info=exc)
+                    pending = None
+                    break
                 pending = None
-                if responder.send_chunk(format_event(item)) == CLOSED:
+                try:
+                    chunk = format_event(item)
+                except Exception as exc:  # noqa: BLE001
+                    # The status is long gone, so the only honest answer is to
+                    # end the stream. Logged here because nothing above will:
+                    # this runs after the handler returned, so the wrapper's
+                    # own except clause has already been left behind.
+                    logger.exception("sse source produced an unsendable event", exc_info=exc)
+                    break
+                if responder.send_chunk(chunk) == CLOSED:
                     break
             elif sse.ping is not None:
                 # Idle. A comment line keeps proxies from closing the stream,

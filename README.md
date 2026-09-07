@@ -91,7 +91,7 @@ is installed on the host.
 make venvs          # .venv (free-threaded 3.14t) and .venv-gil (standard 3.14)
 make build          # maturin develop --release into both
 make run            # examples/hello.py
-make verify         # all fifteen test suites
+make verify         # all sixteen test suites
 make bench          # hello-world comparison
 make bench-cpu      # CPU-bound handler scaling
 make sweep          # handler cost against worker-loop count
@@ -123,7 +123,7 @@ src/            Rust crate, built as the aether._core extension module
 python/aether/  App, routing, pydantic, OpenAPI, topics, SSE, sockets, runtime
 examples/       hello world, live feed, durable queue, agent service, cluster node
 bench/          hello-world, CPU-parallelism and handler-cost sweeps
-tests/          fifteen standalone scripts, each exiting non-zero on failure
+tests/          sixteen standalone scripts, each exiting non-zero on failure
 www/            documentation sources
 ```
 

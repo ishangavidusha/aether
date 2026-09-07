@@ -12,6 +12,7 @@ but an async generator works just as well.
 """
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,18 +31,50 @@ SSE_HEADERS = [
 ]
 
 
+#: Every line terminator the event-stream format recognises. A client ends a
+#: line at any of them, so all three have to be treated the same way here.
+LINE_BREAK = re.compile(r"\r\n|\r|\n")
+
+
+def _field(name: str, value: str) -> str:
+    """Reject a field value that could break out of its own line.
+
+    An `id` of `"1\n\ndata: ..."` does not produce an odd-looking id: the blank
+    line ends the event and the rest becomes a second event the application
+    never sent. Any value carrying a line break or a NUL is invalid in the
+    format, so it is refused rather than quietly mangled.
+    """
+    if LINE_BREAK.search(value) or "\0" in value:
+        raise ValueError(
+            f"SSE {name} may not contain a line break or NUL: {value!r}. "
+            f"Such a value would inject fields into the stream"
+        )
+    return value
+
+
 @dataclass(slots=True)
 class Event:
     """One event, when the defaults are not enough.
 
     Yield plain values for the common case; yield this to set a name, an id for
     resumption, or a client retry hint.
+
+    `event` and `id` may not contain a line break or a NUL; both raise
+    `ValueError`. Checked here so the traceback points at the code that built
+    the event, and again at render time, because this is a mutable dataclass
+    and the fields can be reassigned afterwards.
     """
 
     data: Any
     event: str | None = None
     id: str | None = None
     retry: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.event is not None:
+            _field("event", self.event)
+        if self.id is not None:
+            _field("id", str(self.id))
 
 
 def _encode_data(data: Any) -> str:
@@ -63,14 +96,18 @@ def format_event(item: Any) -> bytes:
 
     lines: list[str] = []
     if name:
-        lines.append(f"event: {name}")
+        lines.append(f"event: {_field('event', name)}")
     if ident is not None:
-        lines.append(f"id: {ident}")
+        lines.append(f"id: {_field('id', str(ident))}")
     if retry is not None:
-        lines.append(f"retry: {retry}")
-    # A payload containing newlines has to become several data: lines, or the
-    # blank line inside it would terminate the event early.
-    for line in _encode_data(data).split("\n"):
+        # Coerced rather than interpolated: the annotation says int, and a str
+        # here would carry a line break straight onto the wire.
+        lines.append(f"retry: {int(retry)}")
+    # A payload containing line breaks has to become several data: lines, or
+    # the break would terminate the event early and everything after it would
+    # be parsed as a new one. Splitting on all three terminators matters: a
+    # lone carriage return ends a line for the client too.
+    for line in LINE_BREAK.split(_encode_data(data)):
         lines.append(f"data: {line}")
     return ("\n".join(lines) + "\n\n").encode()
 
