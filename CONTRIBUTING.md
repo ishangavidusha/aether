@@ -74,7 +74,9 @@ explains each in context; the short form:
    creation, no refcount, on any tokio thread. This is worth 5.4x.
 2. **Never block in native code while attached.** Wrap a blocking wait in
    `py.detach`; blocking while attached deadlocks free-threaded CPython at a
-   stop-the-world point.
+   stop-the-world point, and on the GIL build it stops every other thread.
+   To wake Python from a tokio thread, push onto the worker queue — never call
+   `loop.call_soon_threadsafe`, which can block on the loop's self-pipe.
 3. **Wakeups coalesce.** At most one wake byte in flight, and the flag is
    cleared *before* draining — clearing it after loses a racing push.
 4. **Handlers are `async def`**, enforced at registration.

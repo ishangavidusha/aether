@@ -56,6 +56,12 @@ deadlock happened.
 **Wakeups coalesce.** At most one wake byte in flight, and the flag is cleared
 *before* draining. Clearing it after loses a racing push.
 
+Anything a tokio thread needs to tell Python — a request, or a notification
+that a client disconnected — goes through that same queue and that same byte.
+A tokio thread that schedules work by calling into the interpreter can block
+inside the event loop's self-pipe write, and on the GIL build a thread blocked
+while attached stops every other thread in the process.
+
 **Handlers are `async def`**, enforced at registration.
 
 **Both Python builds work.** Free-threaded 3.14t is the primary target; the GIL
