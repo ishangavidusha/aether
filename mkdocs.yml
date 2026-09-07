@@ -1,6 +1,9 @@
 site_name: Aether
 site_description: A fast Python REST framework with a Rust core, built-in streams, and agent-native interfaces.
 site_author: Ishanga Vidusha
+site_url: https://ishangavidusha.github.io/aether/
+repo_url: https://github.com/ishangavidusha/aether
+repo_name: ishangavidusha/aether
 docs_dir: www
 site_dir: site
 
