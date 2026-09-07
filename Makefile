@@ -2,13 +2,13 @@
 FT_PY  := 3.14.7+freethreaded
 GIL_PY := /opt/homebrew/bin/python3.14
 
-.PHONY: venvs build build-ft build-gil docs docs-serve run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil verify verify-gil up down logs image stack stack-down clean
+.PHONY: venvs build build-ft build-gil docs docs-serve coverage run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil verify verify-gil up down logs image stack stack-down clean
 
 venvs:
 	uv venv --python $(FT_PY) .venv
 	uv venv --python $(GIL_PY) .venv-gil
-	uv pip install --python .venv/bin/python maturin uvicorn granian fastapi httpx openapi-spec-validator websockets redis mcp
-	uv pip install --python .venv-gil/bin/python maturin uvicorn granian fastapi httpx openapi-spec-validator websockets redis mcp
+	uv pip install --python .venv/bin/python maturin uvicorn granian fastapi httpx openapi-spec-validator websockets redis mcp coverage
+	uv pip install --python .venv-gil/bin/python maturin uvicorn granian fastapi httpx openapi-spec-validator websockets redis mcp coverage
 	# Docs tooling only in the GIL venv: mkdocs has no reason to run twice.
 	uv pip install --python .venv-gil/bin/python mkdocs-material 'mkdocstrings[python]' ruff
 
@@ -35,39 +35,33 @@ bench-cpu: build-ft
 bench-cpu-gil: build-gil
 	.venv-gil/bin/python bench/cpu.py --python .venv-gil/bin/python
 
+# One list, used by both builds and by the coverage run. Three copies of it is
+# how a suite ends up running on one interpreter and not the other.
+SUITES := workers routing query bodies openapi capabilities streams sse \
+          websocket hardening plumbing injection durable backpressure verify
+
 verify: build-ft
-	.venv/bin/python tests/workers.py
-	.venv/bin/python tests/routing.py
-	.venv/bin/python tests/query.py
-	.venv/bin/python tests/bodies.py
-	.venv/bin/python tests/openapi.py
-	.venv/bin/python tests/capabilities.py
-	.venv/bin/python tests/streams.py
-	.venv/bin/python tests/sse.py
-	.venv/bin/python tests/websocket.py
-	.venv/bin/python tests/hardening.py
-	.venv/bin/python tests/plumbing.py
-	.venv/bin/python tests/injection.py
-	.venv/bin/python tests/durable.py
-	.venv/bin/python tests/backpressure.py
-	.venv/bin/python tests/verify.py
+	@for s in $(SUITES); do .venv/bin/python tests/$$s.py || exit 1; done
 
 verify-gil: build-gil
-	.venv-gil/bin/python tests/workers.py
-	.venv-gil/bin/python tests/routing.py
-	.venv-gil/bin/python tests/query.py
-	.venv-gil/bin/python tests/bodies.py
-	.venv-gil/bin/python tests/openapi.py
-	.venv-gil/bin/python tests/capabilities.py
-	.venv-gil/bin/python tests/streams.py
-	.venv-gil/bin/python tests/sse.py
-	.venv-gil/bin/python tests/websocket.py
-	.venv-gil/bin/python tests/hardening.py
-	.venv-gil/bin/python tests/plumbing.py
-	.venv-gil/bin/python tests/injection.py
-	.venv-gil/bin/python tests/durable.py
-	.venv-gil/bin/python tests/backpressure.py
-	.venv-gil/bin/python tests/verify.py
+	@for s in $(SUITES); do .venv-gil/bin/python tests/$$s.py || exit 1; done
+
+# Branch coverage of the Python half. COVERAGE_CORE=sysmon matters: handlers run
+# on threads Rust created, which the classic trace hook never sees, and the
+# report would understate the runtime by a wide margin.
+COVERAGE_MIN := 85
+
+coverage: build-ft
+	@rm -f .coverage .coverage.[0-9]* 2>/dev/null || true
+	@for s in $(SUITES); do \
+		COVERAGE_CORE=sysmon .venv/bin/python -m coverage run --branch -p \
+			--source=python/aether tests/$$s.py || exit 1; \
+	done
+	@.venv/bin/python -m coverage combine -q
+	@.venv/bin/python -m coverage report --precision=1 --sort=cover \
+		--fail-under=$(COVERAGE_MIN)
+	@.venv/bin/python -m coverage html -q -d htmlcov
+	@echo "html report: htmlcov/index.html"
 
 # --- public documentation ---------------------------------------------------
 # Built from the GIL venv, which is where the docs tooling lives. mkdocstrings
@@ -114,4 +108,4 @@ stack-down:
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.stack.yml down -v
 
 clean:
-	rm -rf target .venv .venv-gil bench/results site
+	rm -rf target .venv .venv-gil bench/results site htmlcov

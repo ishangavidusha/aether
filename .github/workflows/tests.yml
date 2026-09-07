@@ -1,0 +1,85 @@
+# The test suites, on both interpreter builds, against a real Redis.
+#
+# Public repositories get standard runners for free, so this runs on every push
+# rather than being rationed.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The free-threaded leg runs under coverage, so the suites are not
+          # executed twice just to measure them.
+          - label: free-threaded 3.14t
+            python: 3.14t
+            venv: .venv
+            target: coverage
+          - label: GIL 3.14
+            python: "3.14"
+            venv: .venv-gil
+            target: verify-gil
+
+    services:
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      AETHER_TEST_REDIS: redis://127.0.0.1:6379
+      # Turns tests/durable.py's SKIP into a failure. A green run that never
+      # touched milestone 4 is the thing this workflow exists to prevent.
+      AETHER_REQUIRE_REDIS: "1"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Create the environment
+        run: |
+          uv venv --python ${{ matrix.python }} ${{ matrix.venv }}
+          uv pip install --python ${{ matrix.venv }}/bin/python \
+            maturin httpx openapi-spec-validator websockets redis mcp coverage pydantic
+
+      - name: Confirm the interpreter is the one asked for
+        run: |
+          ${{ matrix.venv }}/bin/python -c "import sys; \
+            print(sys.version); \
+            print('gil:', getattr(sys, '_is_gil_enabled', lambda: True)())"
+
+      - name: Run the suites
+        run: make ${{ matrix.target }}
+
+      - name: Upload the coverage report
+        if: matrix.target == 'coverage'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: htmlcov
+          retention-days: 14

@@ -287,6 +287,12 @@ def main() -> None:
     if not asyncio.run(reachable()):
         why = "redis package not installed" if not HAVE_REDIS else f"no redis at {URL}"
         print(f"redis: unavailable ({why})")
+        # CI sets AETHER_REQUIRE_REDIS. A suite that passes without testing
+        # anything is worse than one that fails, and this is the only suite
+        # covering milestone 4.
+        if os.environ.get("AETHER_REQUIRE_REDIS"):
+            print("\nRESULT: FAIL (AETHER_REQUIRE_REDIS is set and redis is unreachable)")
+            sys.exit(1)
         print("\nRESULT: SKIP")
         sys.exit(0)
 

@@ -6,6 +6,9 @@ __pycache__/
 /dist
 /site
 /bench/results
+/htmlcov
+.coverage
+.coverage.*
 
 # internal working notes and the agent's instructions, deliberately not
 # tracked: they are specific to this machine. Public equivalents live in
