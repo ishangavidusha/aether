@@ -7,5 +7,8 @@ __pycache__/
 /site
 /bench/results
 
-# internal working notes, deliberately not tracked
+# internal working notes and the agent's instructions, deliberately not
+# tracked: they are specific to this machine. Public equivalents live in
+# CONTRIBUTING.md.
 /docs/
+/CLAUDE.md
