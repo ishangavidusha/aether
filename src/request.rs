@@ -51,21 +51,27 @@ impl Request {
         }
     }
 
+    /// The HTTP method, uppercase.
     #[getter]
     fn method(&self) -> &str {
         &self.method
     }
 
+    /// The request path, without the query string.
     #[getter]
     fn path(&self) -> &str {
         &self.path
     }
 
+    /// The raw query string, or None. Declared query parameters are already
+    /// coerced and passed as handler arguments; this is for the rest.
     #[getter]
     fn query(&self) -> Option<&str> {
         self.query.as_deref()
     }
 
+    /// The raw request body. A pydantic-annotated argument is the usual way
+    /// to read a body; this is for handlers that parse it themselves.
     #[getter]
     fn body<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.body)

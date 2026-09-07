@@ -10,8 +10,8 @@ A topic is a named fan-out point. Producers emit, subscribers iterate:
         ...
 
 Subscribers on *different* worker loops all receive every message. That works
-because free-threaded CPython lets those loops share one process, which is the
-whole reason D-002 targets 3.14t. Under a multiprocess server each worker would
+because free-threaded CPython lets those loops share one process, which is why
+3.14t is the primary target. Under a multiprocess server each worker would
 hold its own private copy of every topic and a message emitted in one would
 never reach the others.
 
@@ -240,7 +240,7 @@ class Topic:
         return delivered
 
     async def _pump(self) -> None:
-        """Feed local subscribers from the stream, skipping our own messages.
+        """Feed local subscribers from the stream, skipping this node's own messages.
 
         Reconnects rather than dying. A tail that gave up on the first dropped
         connection would leave the process silently deaf to every other node,

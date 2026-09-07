@@ -2,13 +2,15 @@
 FT_PY  := 3.14.7+freethreaded
 GIL_PY := /opt/homebrew/bin/python3.14
 
-.PHONY: venvs build build-ft build-gil run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil verify verify-gil up down logs image stack stack-down clean
+.PHONY: venvs build build-ft build-gil docs docs-serve run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil verify verify-gil up down logs image stack stack-down clean
 
 venvs:
 	uv venv --python $(FT_PY) .venv
 	uv venv --python $(GIL_PY) .venv-gil
 	uv pip install --python .venv/bin/python maturin uvicorn granian fastapi httpx openapi-spec-validator websockets redis mcp
 	uv pip install --python .venv-gil/bin/python maturin uvicorn granian fastapi httpx openapi-spec-validator websockets redis mcp
+	# Docs tooling only in the GIL venv: mkdocs has no reason to run twice.
+	uv pip install --python .venv-gil/bin/python mkdocs-material 'mkdocstrings[python]' ruff
 
 build: build-ft build-gil
 
@@ -67,6 +69,16 @@ verify-gil: build-gil
 	.venv-gil/bin/python tests/backpressure.py
 	.venv-gil/bin/python tests/verify.py
 
+# --- public documentation ---------------------------------------------------
+# Built from the GIL venv, which is where the docs tooling lives. mkdocstrings
+# imports the package for the API reference, so the extension has to be built
+# first: an unbuilt tree documents nothing.
+docs: build-gil
+	.venv-gil/bin/python -m mkdocs build --strict
+
+docs-serve: build-gil
+	.venv-gil/bin/python -m mkdocs serve
+
 sweep: build-ft
 	.venv/bin/python bench/sweep.py --python .venv/bin/python
 
@@ -102,4 +114,4 @@ stack-down:
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.stack.yml down -v
 
 clean:
-	rm -rf target .venv .venv-gil bench/results
+	rm -rf target .venv .venv-gil bench/results site

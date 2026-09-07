@@ -4,6 +4,7 @@ __pycache__/
 *.so
 *.pyd
 /dist
+/site
 /bench/results
 
 # internal working notes, deliberately not tracked

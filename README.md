@@ -7,6 +7,20 @@ agent-native interfaces. Hobby project, not a product.
 pydantic bodies, backpressure, OpenAPI 3.1, in-process topics, Server-Sent
 Events and WebSocket all work. Nothing here is API-stable.
 
+## Documentation
+
+The public documentation site lives in `www/`, built with MkDocs Material and
+mkdocstrings.
+
+```bash
+make docs         # build into site/, with --strict
+make docs-serve   # live reload on http://127.0.0.1:8000
+```
+
+It covers the same ground as this file at more length — a guide per feature, an
+API reference generated from the docstrings, and pages on why the design is
+what it is and what the benchmarks actually measured.
+
 ## Design decisions so far
 
 - Rust runtime (tokio + hyper + PyO3). The developer-facing API is Python.

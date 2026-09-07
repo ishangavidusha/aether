@@ -2,8 +2,8 @@
 
 Everything Aether reports goes through the standard `logging` module, under the
 `aether` logger, so it lands wherever an application already sends its logs.
-Nothing is printed to stderr directly any more; a framework that writes past
-your logging setup is a framework you cannot run in production.
+Nothing is written to stderr directly, so output from the framework obeys the
+application's own logging configuration.
 
     import logging
     logging.basicConfig(level=logging.INFO)
