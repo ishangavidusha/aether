@@ -203,19 +203,21 @@ impl Responder {
         Ok(())
     }
 
-    /// Call `callback` on `event_loop` once the client disconnects.
+    /// Call `callback` on the worker's loop once the client disconnects.
     ///
     /// Without this a stream sitting in `__anext__` waiting for its next
     /// message would never notice the client had gone, holding a subscription
     /// and an in-flight slot until something happened to be published. Polling
     /// would also work but costs a wakeup per connection per interval; this
-    /// costs one Python call per connection, at teardown.
-    fn notify_disconnect(
-        &self,
-        py: Python<'_>,
-        event_loop: Py<PyAny>,
-        callback: Py<PyAny>,
-    ) -> PyResult<()> {
+    /// costs one queued callback per connection, at teardown.
+    ///
+    /// The notification goes through the worker's wake queue rather than
+    /// `call_soon_threadsafe`. The task below runs on a tokio thread, and an
+    /// earlier version attached to the interpreter there: on the GIL build that
+    /// thread then blocked inside the loop's self-pipe write while holding the
+    /// lock, and shutdown deadlocked (I-038). Invariants 1 and 2 both say not
+    /// to, and the free-threaded build hid it.
+    fn notify_disconnect(&self, callback: Py<PyAny>) -> PyResult<()> {
         let watcher = self
             .body_dropped
             .lock()
@@ -223,18 +225,16 @@ impl Responder {
             .take();
 
         let Some(watcher) = watcher else {
-            // Not streaming, or already being watched: fire straight away.
-            return event_loop
-                .call_method1(py, "call_soon_threadsafe", (callback,))
-                .map(|_| ());
+            // Not streaming, or already being watched: hand it over now.
+            self.queue.push_wakeup(callback);
+            return Ok(());
         };
 
+        let queue = self.queue.clone();
         self.runtime.spawn(async move {
             // Errors when the guard is dropped, which is exactly the signal.
             let _ = watcher.await;
-            Python::attach(|py| {
-                let _ = event_loop.call_method1(py, "call_soon_threadsafe", (callback,));
-            });
+            queue.push_wakeup(callback);
         });
         Ok(())
     }

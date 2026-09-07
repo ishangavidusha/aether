@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use futures_util::{SinkExt, StreamExt};
 use pyo3::prelude::*;
@@ -15,6 +15,8 @@ use pyo3::types::PyBytes;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::{Message, Role};
 use tokio_tungstenite::WebSocketStream;
+
+use crate::queue::WorkerQueue;
 
 /// How many outgoing messages may queue before `send` reports back-pressure.
 const SEND_BUFFER: usize = 256;
@@ -36,6 +38,12 @@ pub struct Shared {
     close_waiters: Mutex<Vec<(Py<PyAny>, Py<PyAny>)>>,
     outgoing: mpsc::Sender<Frame>,
     closed: AtomicBool,
+    /// The queue of the worker running this socket's handler, bound when the
+    /// connection is handed to a worker and therefore before any waiter can
+    /// exist. Wakes travel through it: the tokio task must not attach to the
+    /// interpreter to schedule them, which on the GIL build deadlocked the
+    /// whole process (I-038).
+    queue: OnceLock<Arc<WorkerQueue>>,
 }
 
 impl Shared {
@@ -48,17 +56,30 @@ impl Shared {
                 close_waiters: Mutex::new(Vec::new()),
                 outgoing: tx,
                 closed: AtomicBool::new(false),
+                queue: OnceLock::new(),
             }),
             rx,
         )
     }
 
+    /// Bound once, when the connection is handed to a worker.
+    pub fn bind_queue(&self, queue: Arc<WorkerQueue>) {
+        let _ = self.queue.set(queue);
+    }
+
+    /// Hand a callback to the worker's loop. Called from the tokio task, so it
+    /// must not touch the interpreter: moving the handle into the queue does
+    /// not, and the loop runs it from the drain callback.
+    fn schedule(&self, callback: Py<PyAny>) {
+        if let Some(queue) = self.queue.get() {
+            queue.push_wakeup(callback);
+        }
+    }
+
     fn wake(&self) {
         let waiter = self.waiter.lock().ok().and_then(|mut w| w.take());
-        if let Some((event_loop, callback)) = waiter {
-            Python::attach(|py| {
-                let _ = event_loop.call_method1(py, "call_soon_threadsafe", (callback,));
-            });
+        if let Some((_event_loop, callback)) = waiter {
+            self.schedule(callback);
         }
     }
 
@@ -77,12 +98,8 @@ impl Shared {
             .lock()
             .map(|mut w| std::mem::take(&mut *w))
             .unwrap_or_default();
-        if !waiting.is_empty() {
-            Python::attach(|py| {
-                for (event_loop, callback) in waiting {
-                    let _ = event_loop.call_method1(py, "call_soon_threadsafe", (callback,));
-                }
-            });
+        for (_event_loop, callback) in waiting {
+            self.schedule(callback);
         }
     }
 }

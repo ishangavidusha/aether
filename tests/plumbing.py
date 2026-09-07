@@ -219,6 +219,50 @@ def streams_release_their_slot() -> None:
 
 
 # --------------------------------------------------------------------------
+def abandoned_stream_does_not_wedge_shutdown() -> None:
+    """A client that walks away from an idle stream, then an immediate stop.
+
+    This is the sequence that deadlocked the GIL build (I-038). The disconnect
+    was reported by attaching to the interpreter from a tokio thread and calling
+    `loop.call_soon_threadsafe`, which blocks writing to the loop's self-pipe.
+    On the GIL build that thread holds the lock while blocked, so the thread
+    trying to shut the server down never runs again and the process stops dead.
+    Notifications now travel through the worker's wake queue instead.
+
+    The deadlock needed Linux and a loaded machine to show itself; CI reproduced
+    it every run and this laptop never did. What this check guarantees is that
+    the path is exercised on both builds, and that shutdown after an abandoned
+    stream still returns promptly.
+    """
+    from aether import SSE
+
+    app = App(openapi_url=None, docs_url=None, mcp_url=None)
+
+    @app.get("/idle")
+    async def idle(_: Request):
+        async def source():
+            yield "first"
+            # Nothing else, ever: the stream is parked in __anext__ exactly as
+            # a subscription to a quiet topic would be.
+            await asyncio.Event().wait()
+
+        return SSE(source(), ping=None)
+
+    client = TestClient(app, workers=1, timeout=20, shutdown_grace=5.0).start()
+    try:
+        with client.stream("GET", "/idle") as response:
+            check(response.status_code == 200, f"stream returned {response.status_code}")
+            # Read only the first event, then abandon the connection.
+            for _ in response.iter_lines():
+                break
+        started = time.perf_counter()
+    finally:
+        client.stop()
+    drain = time.perf_counter() - started
+    check(drain < 5.0, f"shutdown took {drain:.1f}s after an abandoned stream")
+
+
+# --------------------------------------------------------------------------
 def graceful_shutdown() -> None:
     """In-flight work finishes instead of being dropped."""
     app = App(openapi_url=None, docs_url=None, mcp_url=None)
@@ -346,6 +390,7 @@ def main() -> None:
         request_timeout,
         timeout_does_not_cut_streams,
         streams_release_their_slot,
+        abandoned_stream_does_not_wedge_shutdown,
         graceful_shutdown,
         connection_cap,
         test_client_transports,

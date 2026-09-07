@@ -345,8 +345,18 @@ fn enqueue(state: &State, pending: Pending) -> bool {
     let count = state.workers.len();
     for offset in 0..count {
         let idx = (start + offset) % count;
+        // Cheap: None for every ordinary request, one Arc clone for an upgrade.
+        let socket = pending.websocket.clone();
         match state.workers[idx].queue.try_push(pending) {
-            Ok(()) => return true,
+            Ok(()) => {
+                // The socket's tokio task wakes the handler through this
+                // queue, so it has to know which worker took it before the
+                // handler can register a waiter.
+                if let Some(shared) = socket {
+                    shared.bind_queue(state.workers[idx].queue.clone());
+                }
+                return true;
+            }
             Err(returned) => pending = returned,
         }
     }

@@ -15,6 +15,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crossbeam_queue::SegQueue;
+use pyo3::prelude::*;
 use tokio::sync::oneshot;
 
 use crate::responder::Reply;
@@ -43,6 +44,15 @@ pub struct Pending {
 
 pub struct WorkerQueue {
     queue: SegQueue<Pending>,
+    /// Callbacks to run on this worker's loop, pushed from tokio threads.
+    ///
+    /// A tokio thread must never schedule work by calling into the
+    /// interpreter. `loop.call_soon_threadsafe` writes to the loop's self-pipe
+    /// and can block there; on the GIL build a thread that blocks while
+    /// attached holds the lock and stops every other thread, which deadlocked
+    /// shutdown (I-038). Holding and moving a `Py<PyAny>` touches no refcount,
+    /// so the wake path that already exists for requests carries these too.
+    wakeups: SegQueue<Py<PyAny>>,
     /// True when a wake byte is in flight and not yet consumed. Collapses a
     /// burst of requests into a single wakeup.
     notified: AtomicBool,
@@ -65,6 +75,7 @@ impl WorkerQueue {
     pub fn new(waker: UnixStream, limit: usize) -> Self {
         Self {
             queue: SegQueue::new(),
+            wakeups: SegQueue::new(),
             notified: AtomicBool::new(false),
             waker,
             inflight: AtomicUsize::new(0),
@@ -110,15 +121,28 @@ impl WorkerQueue {
         self.queue.pop()
     }
 
+    /// Ask this worker's loop to call `callback`. Safe from a tokio thread:
+    /// moving the handle touches no refcount and the wake is one socket write.
+    pub fn push_wakeup(&self, callback: Py<PyAny>) {
+        self.wakeups.push(callback);
+        self.wake();
+    }
+
+    pub fn pop_wakeup(&self) -> Option<Py<PyAny>> {
+        self.wakeups.pop()
+    }
+
     /// Called by the drain callback before it starts popping, so that a
     /// producer racing with the drain always triggers a fresh wakeup.
     pub fn clear_notified(&self) {
         self.notified.store(false, Ordering::SeqCst);
     }
 
-    /// Re-arm if anything arrived while we were draining.
+    /// Re-arm if anything arrived while we were draining. Both queues count:
+    /// a disconnect notification that lands mid-drain and does not re-arm sits
+    /// unserved until the next request, which for an idle stream is never.
     pub fn rewake_if_pending(&self) {
-        if !self.queue.is_empty() {
+        if !self.queue.is_empty() || !self.wakeups.is_empty() {
             self.wake();
         }
     }

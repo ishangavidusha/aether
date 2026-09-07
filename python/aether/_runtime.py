@@ -78,7 +78,7 @@ async def pump_sse(sse, responder):
             gone.set_result(None)
 
     responder.start_stream(sse.status, "text/event-stream; charset=utf-8", SSE_HEADERS)
-    responder.notify_disconnect(loop, _client_left)
+    responder.notify_disconnect(_client_left)
 
     iterator = sse.source.__aiter__()
     pending = None

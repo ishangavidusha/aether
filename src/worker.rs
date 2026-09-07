@@ -81,6 +81,15 @@ impl Drainer {
         // drain writes a new wake byte rather than being silently swallowed.
         self.queue.clear_notified();
 
+        // Notifications first: they are cheap, and one of them is a stream
+        // learning its client is gone, which frees a subscription and a slot.
+        // A raising callback must not abandon the rest of the batch.
+        while let Some(callback) = self.queue.pop_wakeup() {
+            if let Err(err) = callback.call0(py) {
+                err.write_unraisable(py, None);
+            }
+        }
+
         let run_handler = self.run_handler.bind(py);
         let create_task = self.create_task.bind(py);
 
