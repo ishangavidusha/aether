@@ -39,6 +39,30 @@ async def get_file(_: Request, rest: str):
     return {"path": rest}
 ```
 
+!!! warning "A catch-all is client input, not a path"
+
+    `{*rest}` hands over what the client sent. `..` is not stripped, in either
+    its plain or its encoded form. A handler that joins it to a directory must
+    sanitise it first — this is a router, not a file server.
+
+## Percent-encoding
+
+Path parameters are percent-decoded before they are coerced, the same as query
+parameters.
+
+```
+GET /items/a%20b        ->  "a b"
+GET /items/a%2Fb        ->  "a/b"
+GET /items/caf%C3%A9    ->  "café"
+GET /items/a+b          ->  "a+b"
+```
+
+`+` is a space only in a query string; in a path it is a literal plus.
+
+Routing happens against the raw path, so a `%2F` that decodes to a slash cannot
+change which route matched. Bytes that are not valid UTF-8 become replacement
+characters rather than an error, which is what the query side has always done.
+
 Supported annotations are `str`, `int`, `float`, `bool`, `uuid.UUID`,
 `datetime.date` and `datetime.datetime`. Anything else is a `TypeError` at
 import time, as is a path parameter the handler does not accept, or a handler

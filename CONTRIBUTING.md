@@ -30,7 +30,7 @@ because this is a Python extension module rather than a binary.
 ## Tests
 
 ```bash
-make verify        # sixteen suites, free-threaded
+make verify        # seventeen suites, free-threaded
 make verify-gil    # the same suites on the GIL build
 ```
 

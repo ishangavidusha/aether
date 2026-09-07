@@ -67,7 +67,10 @@ CASES = [
     ("GET", "/users/4.5", 422, None),
     ("GET", "/users/", 404, None),
     ("GET", "/things/hello", 200, {"name": "hello", "type": "str"}),
-    ("GET", "/things/a%20b", 200, {"name": "a%20b", "type": "str"}),
+    # Decoded since 2026-09-08 (I-031). This case asserted the encoded form,
+    # which was the defect: a query parameter with the same content arrived
+    # decoded. `tests/wire.py` covers the rest of the encoding behaviour.
+    ("GET", "/things/a%20b", 200, {"name": "a b", "type": "str"}),
     ("GET", "/scores/1.5", 200, {"value": 1.5, "type": "float"}),
     ("GET", "/scores/2", 200, {"value": 2.0, "type": "float"}),
     ("GET", "/scores/nan", 422, None),

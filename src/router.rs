@@ -8,6 +8,7 @@
 //! means `/users/abc` for an `int` parameter or a missing required query
 //! parameter is rejected without ever waking a Python worker.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use matchit::Router as Matcher;
@@ -303,8 +304,12 @@ impl Router {
                 continue;
             }
 
+            let decoded;
             let raw = match param.source {
-                Source::Path => found.params.get(&param.name),
+                Source::Path => {
+                    decoded = found.params.get(&param.name).map(decode_path);
+                    decoded.as_deref()
+                }
                 // First wins on a repeated key unless the handler asked for a
                 // list, which is what `repeated` above handles.
                 Source::Query => pairs
@@ -351,6 +356,29 @@ impl Router {
         allowed.sort_unstable();
         RouteError::MethodNotAllowed(allowed.join(", "))
     }
+}
+
+/// Percent-decode one path segment.
+///
+/// Query values have always been decoded, by `form_urlencoded`; path
+/// parameters were not, so the same framework handed a handler `a%20b` from a
+/// path and `a b` from a query. Decoded here, lossily on invalid UTF-8,
+/// matching what the query side already does.
+///
+/// `+` is deliberately left alone. It means a space in a query string and a
+/// literal plus everywhere else in a URL.
+///
+/// Routing has already happened against the raw path when this runs, so a
+/// `%2F` that decodes to a slash cannot change which route was chosen. A
+/// catch-all is decoded the same way, which means `%2E%2E` arrives as `..`;
+/// a handler that turns one into a filesystem path has to sanitise it, as it
+/// would with the unencoded form that was always possible.
+fn decode_path(raw: &str) -> Cow<'_, str> {
+    // No escape, no work: the overwhelmingly common case allocates nothing.
+    if !raw.contains('%') {
+        return Cow::Borrowed(raw);
+    }
+    percent_encoding::percent_decode_str(raw).decode_utf8_lossy()
 }
 
 fn coerce(raw: &str, param: &ParamSpec) -> Result<ParamValue, ParamError> {
