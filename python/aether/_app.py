@@ -6,7 +6,7 @@ from typing import Any
 from . import _openapi
 from ._response import Response
 from ._middleware import Reply, make_gate, wrap as wrap_middleware
-from ._routing import RouteInfo, build_route
+from ._routing import RouteInfo, build_route, route_shape
 from ._streams import DROP_OLDEST, Topic
 from ._workers import default_workers, gil_enabled
 
@@ -90,10 +90,39 @@ class App:
         def decorator(fn):
             # Validates the handler against its path and fails here, at import
             # time, rather than on the first request.
-            self.routes.append(build_route(fn, method, path, tool=tool))
+            self._add(build_route(fn, method, path, tool=tool))
             return fn
 
         return decorator
+
+    def _add(self, route: RouteInfo) -> None:
+        """Register a route, refusing one the router could not hold.
+
+        The radix tree rejects two routes of the same shape, and it is built
+        when the server starts — on whatever thread called `serve`, which for
+        the test client is a background thread where the error becomes a
+        connection refused and nothing else. Checked here instead, so a
+        duplicate fails at import, pointing at the decorator that caused it.
+
+        A WebSocket route is registered as a GET, so it collides with a GET on
+        the same path, which is the correct answer: only one of them could
+        ever run.
+        """
+        shape = route_shape(route.path)
+        for existing in self.routes:
+            if existing.method == route.method and route_shape(existing.path) == shape:
+                same = existing.path == route.path
+                raise ValueError(
+                    f"{route.method} {route.path} conflicts with "
+                    f"{existing.method} {existing.path}: "
+                    + (
+                        "the same route is registered twice"
+                        if same
+                        else "the paths differ only in parameter names, which the "
+                        "router cannot tell apart"
+                    )
+                )
+        self.routes.append(route)
 
     def get(self, path: str, tool: bool = False):
         return self.route("GET", path, tool=tool)
@@ -153,7 +182,7 @@ class App:
             route = build_route(fn, "GET", path, websocket=True)
             if authorize is not None:
                 route.authorizer = make_gate(authorize)
-            self.routes.append(route)
+            self._add(route)
             return fn
 
         return decorator

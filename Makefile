@@ -38,8 +38,8 @@ bench-cpu-gil: build-gil
 # One list, used by both builds and by the coverage run. Three copies of it is
 # how a suite ends up running on one interpreter and not the other.
 SUITES := workers routing query bodies openapi capabilities streams sse \
-          websocket hardening escaping wire plumbing injection durable \
-          backpressure verify
+          websocket hardening escaping wire failures plumbing injection \
+          durable backpressure verify
 
 # SUITE_TIMEOUT is empty locally and set to `timeout 300` in CI, where a hung
 # suite would otherwise burn the whole job. Echo the name first: a suite that

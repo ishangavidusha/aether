@@ -91,6 +91,22 @@ class RouteInfo:
     """Exposed to agents over MCP. Opt-in, never the default."""
 
 
+#: Every `{name}` and `{*name}`, whatever it is called. Two routes conflict in
+#: the radix tree when they are identical once the names are removed, so the
+#: names carry no information for this comparison.
+_ANY_PLACEHOLDER = re.compile(r"\{\*?[^{}]*\}")
+
+
+def route_shape(path: str) -> str:
+    """The path with parameter names replaced, for conflict detection.
+
+    A catch-all and a plain parameter collapse to the same placeholder because
+    the router refuses them at the same position too: `/f/{*rest}` and
+    `/f/{name}` cannot both exist.
+    """
+    return _ANY_PLACEHOLDER.sub("{}", path)
+
+
 def path_params(path: str) -> list[tuple[str, bool]]:
     """(name, is_wildcard) for each placeholder, in path order."""
     return [(name, star == "*") for star, name in _PLACEHOLDER.findall(path)]

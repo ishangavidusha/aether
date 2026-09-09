@@ -183,48 +183,69 @@ async def _respond(handler, request, responder, params, debug):
         responder.send(500, "text/plain; charset=utf-8", detail)
         return
 
-    status_override = None
-    extra_headers = None
-    if isinstance(result, Reply):
-        result, status_override, extra_headers = merge(result)
+    # Everything below is the response, and it can fail on its own: a value
+    # pydantic or serde cannot encode, a `Response` whose body is not bytes, a
+    # header the http crate refuses. Before this guard those escaped into the
+    # asyncio task, the responder was dropped without a reply, and the client
+    # got the connection-level fallback while the traceback went to asyncio's
+    # default handler rather than the log.
+    try:
+        status_override = None
+        extra_headers = None
+        if isinstance(result, Reply):
+            result, status_override, extra_headers = merge(result)
 
-    if isinstance(result, SSE):
-        await pump_sse(result, responder)
-    elif isinstance(result, Response):
-        responder.send(
-            result.status, result.content_type, result.encoded(), result.header_list()
-        )
-    elif result is None:
-        responder.send(status_override or 204, "text/plain", b"", extra_headers)
-    elif is_model_instance(result):
-        # pydantic serializes straight to bytes, so this skips both a Python
-        # str and our own JSON encoder.
-        responder.send(
-            status_override or 200, "application/json", to_json(result), extra_headers
-        )
-    elif isinstance(result, (bytes, bytearray, memoryview)):
-        responder.send(
-            status_override or 200,
-            "application/octet-stream",
-            bytes(result),
-            extra_headers,
-        )
-    elif isinstance(result, str):
-        responder.send(
-            status_override or 200,
-            "text/plain; charset=utf-8",
-            result.encode(),
-            extra_headers,
-        )
-    elif status_override is not None or extra_headers is not None:
-        # send_json cannot carry a status or headers, so encode here instead.
-        import json as _json
+        if isinstance(result, SSE):
+            await pump_sse(result, responder)
+        elif isinstance(result, Response):
+            responder.send(
+                result.status, result.content_type, result.encoded(), result.header_list()
+            )
+        elif result is None:
+            responder.send(status_override or 204, "text/plain", b"", extra_headers)
+        elif is_model_instance(result):
+            # pydantic serializes straight to bytes, so this skips both a Python
+            # str and our own JSON encoder.
+            responder.send(
+                status_override or 200, "application/json", to_json(result), extra_headers
+            )
+        elif isinstance(result, (bytes, bytearray, memoryview)):
+            responder.send(
+                status_override or 200,
+                "application/octet-stream",
+                bytes(result),
+                extra_headers,
+            )
+        elif isinstance(result, str):
+            responder.send(
+                status_override or 200,
+                "text/plain; charset=utf-8",
+                result.encode(),
+                extra_headers,
+            )
+        elif status_override is not None or extra_headers is not None:
+            # send_json cannot carry a status or headers, so encode here instead.
+            import json as _json
 
-        responder.send(
-            status_override or 200,
-            "application/json",
-            _json.dumps(result, default=str).encode(),
-            extra_headers,
+            responder.send(
+                status_override or 200,
+                "application/json",
+                _json.dumps(result, default=str).encode(),
+                extra_headers,
+            )
+        else:
+            responder.send_json(200, result)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "response could not be sent",
+            exc_info=exc,
+            extra={"method": request.method, "path": request.path},
         )
-    else:
-        responder.send_json(200, result)
+        detail = (
+            f"{type(exc).__name__}: {exc}".encode() if debug else b"internal server error"
+        )
+        try:
+            responder.send(500, "text/plain; charset=utf-8", detail)
+        except Exception:  # noqa: BLE001
+            # Already answered, or a stream that had started. Nothing to add.
+            pass

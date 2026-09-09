@@ -94,9 +94,43 @@ The three richer types are validated with real calendar and format checking, so
 ## Matching order
 
 Static segments win over dynamic ones, and a catch-all is the last resort, so
-`/users/me` and `/users/{user_id}` can coexist and the literal wins. This is
-the radix tree's own precedence, not a scan down a list of patterns, which is
-why routing cost does not grow with the number of routes.
+`/users/me` and `/users/{user_id}` can coexist and the literal wins, whichever
+order they were registered in. This is the radix tree's own precedence, not a
+scan down a list of patterns, which is why routing cost does not grow with the
+number of routes.
+
+## Trailing slashes
+
+`/orders` and `/orders/` are different routes. Neither redirects to the other,
+and registering one does not create the other: a request for the path you did
+not register gets a `404`.
+
+Nothing is normalised, because the alternatives are worse. A redirect has to
+choose a status code, and the choice changes whether a `POST` body survives it.
+Silently accepting both hides the typo in a client that keeps sending the wrong
+one.
+
+## Conflicting routes
+
+Two routes the router cannot tell apart are refused when the second one is
+registered, so the error names the decorator that caused it rather than
+appearing when the server starts.
+
+```python
+@app.get("/items/{item_id}")
+async def read(_: Request, item_id: int): ...
+
+@app.get("/items/{other}")          # ValueError at import
+async def also_read(_: Request, other: int): ...
+```
+
+That covers registering the same method and path twice, two paths that differ
+only in parameter names, a catch-all against a parameter in the same position,
+and a WebSocket route on a path a `GET` already has — a socket route is
+registered as a `GET`, so only one of the two could ever run.
+
+Routes that differ in any way the router can see are fine, including the same
+path under different methods.
 
 ## Methods you do not write
 
