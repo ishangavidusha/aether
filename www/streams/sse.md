@@ -59,6 +59,23 @@ proxies and load balancers do not close a quiet stream.
 SSE(source, ping=30)      # or ping=None to disable
 ```
 
+## Slow clients
+
+A client that reads more slowly than the source produces will not miss events.
+The connection buffers a small number of chunks; once that is full the stream
+waits for room rather than discarding what it cannot send immediately.
+
+Waiting is what puts a slow reader under the [topic's own backpressure
+policy](topics.md#backpressure). While the connection is blocked, the
+subscription feeding it fills up, and `drop_oldest`, `block` or `error` decides
+what happens next — a decision that belongs to whoever created the topic, not
+to the code writing bytes to one socket.
+
+The consequence is worth stating plainly: with `block`, one slow reader can
+hold up a producer. That is what `block` means. The default, `drop_oldest`,
+loses history for the slow subscriber alone and leaves everyone else
+untouched.
+
 ## Disconnects
 
 A disconnected client is detected without polling. The response body carries a

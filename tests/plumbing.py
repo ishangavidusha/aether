@@ -304,6 +304,42 @@ def graceful_shutdown() -> None:
     check(drain >= 0.4, f"shutdown returned in {drain:.2f}s, so it did not wait")
 
 
+def shutdown_grace_expires() -> None:
+    """A handler that outlasts the grace period is abandoned, not waited for.
+
+    The branch that gives up had never run: every other test drains in time, so
+    the deadline was only ever a number. Rust coverage found the line.
+    """
+    app = App(openapi_url=None, docs_url=None, mcp_url=None)
+
+    @app.get("/forever")
+    async def forever(_: Request):
+        await asyncio.sleep(30)
+        return {"never": True}
+
+    client = TestClient(app, timeout=20, shutdown_grace=0.5).start()
+
+    def call():
+        try:
+            client.get("/forever")
+        except Exception:  # noqa: BLE001 - the point is that it does not finish
+            pass
+
+    caller = threading.Thread(target=call, daemon=True)
+    caller.start()
+    time.sleep(0.3)
+
+    stopped = time.perf_counter()
+    client.stop()
+    drain = time.perf_counter() - stopped
+
+    check(drain >= 0.4, f"shutdown returned in {drain:.2f}s without waiting out the grace")
+    check(
+        drain < 5.0,
+        f"shutdown took {drain:.1f}s, so it waited for a handler it should have abandoned",
+    )
+
+
 def connection_cap() -> None:
     """More sockets than the cap must queue, not fail.
 
@@ -392,6 +428,7 @@ def main() -> None:
         streams_release_their_slot,
         abandoned_stream_does_not_wedge_shutdown,
         graceful_shutdown,
+        shutdown_grace_expires,
         connection_cap,
         test_client_transports,
     ]

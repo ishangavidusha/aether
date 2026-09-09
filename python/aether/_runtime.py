@@ -14,7 +14,7 @@ from ._logging import logger
 from ._middleware import Reply, merge
 from ._response import Response
 from ._schema import RequestValidationError, is_model_instance, to_json
-from ._sse import CLOSED, SSE, SSE_HEADERS, format_event
+from ._sse import CLOSED, FULL, SSE, SSE_HEADERS, format_event
 from ._websocket import WebSocket
 
 
@@ -56,6 +56,25 @@ async def run_websocket(handler, request, responder, core, params):
     finally:
         core.close()
         responder.finish()
+
+
+#: How long to wait before retrying a chunk the connection had no room for.
+#: Only ever slept when the buffer is already full, which is to say when the
+#: client is slower than the source and the connection is degraded anyway.
+FULL_RETRY = 0.005
+
+
+async def _wait_for_room(responder, chunk, gone):
+    """Retry a chunk the connection had no room for.
+
+    Only awaited when the buffer is already full, so the common path costs
+    nothing: the caller tries first and comes here only if that fails.
+    """
+    result = FULL
+    while result == FULL and not gone.done():
+        await asyncio.sleep(FULL_RETRY)
+        result = responder.send_chunk(chunk)
+    return result
 
 
 async def pump_sse(sse, responder):
@@ -115,11 +134,25 @@ async def pump_sse(sse, responder):
                     # own except clause has already been left behind.
                     logger.exception("sse source produced an unsendable event", exc_info=exc)
                     break
-                if responder.send_chunk(chunk) == CLOSED:
+                # `send_chunk` never blocks, because it runs on a worker
+                # loop shared with every other request. When the buffer is
+                # full it says so and returns, and this pump used to ignore
+                # that: 252 of 400 events vanished from a stream whose client
+                # read slowly, with nothing in the stream or the log to say a
+                # gap existed. Waiting instead is what makes the documented
+                # backpressure apply — the subscription behind this fills and
+                # the topic's own policy decides what to drop, which is the
+                # decision that belongs to whoever created the topic.
+                result = responder.send_chunk(chunk)
+                if result == FULL:
+                    result = await _wait_for_room(responder, chunk, gone)
+                if result == CLOSED:
                     break
             elif sse.ping is not None:
                 # Idle. A comment line keeps proxies from closing the stream,
-                # and doubles as a liveness check.
+                # and doubles as a liveness check. A full buffer means the
+                # connection is anything but idle, so a dropped ping costs
+                # nothing and waiting for room would be pointless.
                 if responder.send_chunk(b": ping\n\n") == CLOSED:
                     break
     finally:

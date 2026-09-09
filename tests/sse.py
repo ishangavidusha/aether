@@ -8,6 +8,9 @@ import asyncio
 import sys
 import threading
 
+import socket
+import time
+
 import httpx
 from pydantic import BaseModel
 
@@ -54,6 +57,21 @@ async def finite(_: Request):
     async def source():
         for i in range(3):
             yield i
+
+    return SSE(source(), ping=None)
+
+
+#: Big enough that a few hundred fill the connection's chunk buffer and the
+#: socket buffer behind it, which is what makes a slow reader slow.
+BULK = "x" * 8000
+BULK_EVENTS = 400
+
+
+@app.get("/bulk")
+async def bulk(_: Request):
+    async def source():
+        for i in range(BULK_EVENTS):
+            yield {"n": i, "pad": BULK}
 
     return SSE(source(), ping=None)
 
@@ -196,6 +214,45 @@ async def run() -> list[str]:
                     break
         if pings < 3:
             bad.append(f"idle stream produced {pings} pings, expected at least 3")
+
+    bad.extend(slow_client_loses_nothing())
+    return bad
+
+
+def slow_client_loses_nothing() -> list[str]:
+    """A reader slower than the source must not silently miss events.
+
+    `send_chunk` cannot block, so when the connection's buffer is full it
+    reports that and returns. The pump used to ignore the report: this exact
+    case delivered 148 of 400 events, with nothing in the stream or the log to
+    say the other 252 had ever existed. An event stream that quietly drops
+    events is worse than one that stalls, and stalling is what the topic
+    policies are for.
+
+    Raw sockets on purpose: an HTTP client reads as fast as it can, which is
+    the one thing this must not do.
+    """
+    bad: list[str] = []
+    sock = socket.create_connection(("127.0.0.1", PORT), timeout=20)
+    try:
+        sock.sendall(b"GET /bulk HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        # Read nothing while the source runs flat out.
+        time.sleep(1.5)
+        sock.settimeout(10.0)
+        data = b""
+        while True:
+            block = sock.recv(1 << 20)
+            if not block:
+                break
+            data += block
+    except socket.timeout:
+        bad.append("the bulk stream never finished")
+    finally:
+        sock.close()
+
+    seen = data.count(b'"n":')
+    if seen != BULK_EVENTS:
+        bad.append(f"a slow client received {seen} of {BULK_EVENTS} events")
     return bad
 
 
