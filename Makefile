@@ -2,7 +2,7 @@
 FT_PY  := 3.14.7+freethreaded
 GIL_PY := /opt/homebrew/bin/python3.14
 
-.PHONY: venvs build build-ft build-gil docs docs-serve coverage coverage-rust run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil verify verify-gil up down logs image stack stack-down clean
+.PHONY: venvs build build-ft build-gil docs docs-serve coverage coverage-rust lint run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil verify verify-gil up down logs image stack stack-down clean
 
 venvs:
 	uv venv --python $(FT_PY) .venv
@@ -100,6 +100,11 @@ coverage-rust:
 	@echo "html report: target-cov/html/index.html"
 	@echo "restoring the release build"
 	@$(MAKE) --no-print-directory build-ft
+
+# What CI enforces, runnable before pushing.
+lint:
+	cargo fmt --check
+	cargo clippy --all-targets -- -D warnings
 
 # --- public documentation ---------------------------------------------------
 # Built from the GIL venv, which is where the docs tooling lives. mkdocstrings

@@ -205,8 +205,11 @@ impl WebSocket {
 }
 
 /// Own the socket until either side finishes.
-pub async fn drive<S>(stream: WebSocketStream<S>, shared: Arc<Shared>, mut outgoing: mpsc::Receiver<Frame>)
-where
+pub async fn drive<S>(
+    stream: WebSocketStream<S>,
+    shared: Arc<Shared>,
+    mut outgoing: mpsc::Receiver<Frame>,
+) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let (mut sink, mut source) = stream.split();

@@ -156,6 +156,10 @@ pub struct Worker {
 }
 
 impl Worker {
+    /// Eight arguments, one over the limit. Called once per worker at start,
+    /// with a different value for each, so grouping them would be a struct
+    /// that exists only to satisfy a count.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         py: Python<'_>,
         index: usize,

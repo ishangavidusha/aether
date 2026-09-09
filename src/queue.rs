@@ -106,6 +106,13 @@ impl WorkerQueue {
 
     /// Called from tokio threads. Returns the item when this worker is at its
     /// limit, so the caller can try another worker or shed the request.
+    ///
+    /// The `Err` variant is the whole request, which clippy notes is large.
+    /// Boxing it would move an allocation onto the shed path — the path taken
+    /// when the server is already overloaded, and the one place where an extra
+    /// allocation is least welcome. The cost here is stack space in a function
+    /// that already takes the same value by value.
+    #[allow(clippy::result_large_err)]
     pub fn try_push(&self, item: Pending) -> Result<(), Pending> {
         // Racy against other producers. Overshooting by a few under a burst is
         // fine; what matters is that the number cannot grow without bound.

@@ -58,11 +58,23 @@ pub struct Server {
 }
 
 /// (method, path, handler, params, is_websocket, authorizer)
-type Route = (String, String, Py<PyAny>, Vec<SpecTuple>, bool, Option<Py<PyAny>>);
+type Route = (
+    String,
+    String,
+    Py<PyAny>,
+    Vec<SpecTuple>,
+    bool,
+    Option<Py<PyAny>>,
+);
 
 #[pymethods]
 impl Server {
     #[new]
+    /// Eleven arguments, which clippy dislikes. This is the Python
+    /// constructor: the signature *is* the API, and collapsing it into a
+    /// config object would move the same fields behind a dict that Python has
+    /// to build on every server start.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         host: String,
         port: u16,
@@ -452,7 +464,10 @@ async fn upgrade_websocket(
                     .unwrap_or_else(|_| plain(StatusCode::FORBIDDEN, "refused"));
             }
             Err(_) => {
-                return plain(StatusCode::INTERNAL_SERVER_ERROR, "authorizer did not answer")
+                return plain(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "authorizer did not answer",
+                )
             }
         }
     }
@@ -550,11 +565,12 @@ async fn handle(
     // Moved, not copied: handing the whole map over costs nothing, and a
     // handler that never reads a header never pays to convert one.
     let headers = std::mem::take(req.headers_mut());
-    let collected = match Limited::new(req.into_body(), state.max_body).collect().await {
+    let collected = match Limited::new(req.into_body(), state.max_body)
+        .collect()
+        .await
+    {
         Ok(collected) => collected,
-        Err(err) if err.downcast_ref::<LengthLimitError>().is_some() => {
-            return Ok(too_large())
-        }
+        Err(err) if err.downcast_ref::<LengthLimitError>().is_some() => return Ok(too_large()),
         Err(_) => return Ok(plain(StatusCode::BAD_REQUEST, "bad body")),
     };
 
@@ -622,13 +638,13 @@ async fn handle(
                 // them, which is what makes SSE possible. `guard` is moved into
                 // the closure so it lives exactly as long as the body, and its
                 // drop is what tells the handler the client has gone.
-                Body::Stream(rx, guard) => StreamBody::new(ReceiverStream::new(rx).map(
-                    move |chunk| {
+                Body::Stream(rx, guard) => {
+                    StreamBody::new(ReceiverStream::new(rx).map(move |chunk| {
                         let _keep_alive = &guard;
                         Ok::<_, Infallible>(Frame::data(chunk))
-                    },
-                ))
-                .boxed(),
+                    }))
+                    .boxed()
+                }
             };
             let mut builder = Response::builder()
                 .status(reply.status)
@@ -638,9 +654,9 @@ async fn handle(
             }
             // A handler-supplied header could be malformed; fall back rather
             // than kill the connection.
-            Ok(builder
-                .body(body)
-                .unwrap_or_else(|_| plain(StatusCode::INTERNAL_SERVER_ERROR, "bad response header")))
+            Ok(builder.body(body).unwrap_or_else(|_| {
+                plain(StatusCode::INTERNAL_SERVER_ERROR, "bad response header")
+            }))
         }
         Err(_) => Ok(plain(
             StatusCode::INTERNAL_SERVER_ERROR,

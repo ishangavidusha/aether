@@ -75,6 +75,16 @@ the same thing as what a client will negotiate.
 **Both interpreter builds must work.** A change that only works free-threaded
 is not finished.
 
+**Rust is formatted and linted, and CI enforces both.**
+
+```bash
+make lint          # cargo fmt --check, then clippy with warnings as errors
+```
+
+Three lints are silenced in the source, each at its own definition with a
+comment saying why. Silence a new one the same way — never crate-wide, and
+never without the reason.
+
 ## Invariants
 
 These are load-bearing. Breaking one silently destroys performance or
