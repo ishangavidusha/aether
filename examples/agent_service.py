@@ -17,9 +17,8 @@ typed arguments, descriptions taken from these docstrings, and hints about
 which ones are safe to call.
 """
 
-from pydantic import BaseModel, Field
-
 from aether import App, Request
+from pydantic import BaseModel, Field
 
 app = App(
     title="Notes",

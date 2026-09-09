@@ -22,12 +22,10 @@ Trailing slashes are asserted here too, because "undefined" was the finding:
 """
 import socket
 import sys
-import threading
 import time
 
 import httpx
-
-from aether import App, Depends, Request, Response
+from aether import App, Depends, Request
 from aether.testing import TestClient, free_port
 
 failures: list[str] = []
@@ -278,7 +276,7 @@ def main() -> None:
         try:
             step()
             print(f"  {step.__name__}: ok")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             failures.append(f"{step.__name__} raised {type(exc).__name__}: {exc}")
             print(f"  {step.__name__}: ERROR")
 
@@ -295,7 +293,7 @@ def main() -> None:
             try:
                 step(*args)
                 print(f"  {step.__name__}: ok")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 failures.append(f"{step.__name__} raised {type(exc).__name__}: {exc}")
                 print(f"  {step.__name__}: ERROR")
 

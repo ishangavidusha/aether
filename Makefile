@@ -101,10 +101,12 @@ coverage-rust:
 	@echo "restoring the release build"
 	@$(MAKE) --no-print-directory build-ft
 
-# What CI enforces, runnable before pushing.
+# What CI enforces, runnable before pushing. Rust formatting and lints, then
+# the Python linter. `ruff format` is deliberately not run: see pyproject.
 lint:
 	cargo fmt --check
 	cargo clippy --all-targets -- -D warnings
+	.venv-gil/bin/python -m ruff check python/aether tests bench examples
 
 # --- public documentation ---------------------------------------------------
 # Built from the GIL venv, which is where the docs tooling lives. mkdocstrings

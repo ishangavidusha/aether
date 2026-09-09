@@ -78,12 +78,16 @@ is not finished.
 **Rust is formatted and linted, and CI enforces both.**
 
 ```bash
-make lint          # cargo fmt --check, then clippy with warnings as errors
+make lint          # cargo fmt --check, clippy with warnings as errors, ruff
 ```
 
-Three lints are silenced in the source, each at its own definition with a
+Three Rust lints are silenced in the source, each at its own definition with a
 comment saying why. Silence a new one the same way — never crate-wide, and
-never without the reason.
+never without the reason. The same goes for a `# noqa` in Python.
+
+`ruff format` is not run. The Python here is already hand-formatted
+consistently, and reformatting it would be 1162 changed lines for no defect
+caught.
 
 ## Invariants
 

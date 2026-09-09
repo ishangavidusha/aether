@@ -115,7 +115,7 @@ def format_event(item: Any) -> bytes:
 class SSE:
     """A streaming `text/event-stream` response."""
 
-    __slots__ = ("source", "ping", "status")
+    __slots__ = ("ping", "source", "status")
 
     def __init__(self, source: Any, *, ping: float | None = 15.0, status: int = 200) -> None:
         """`ping` sends a comment line when idle that long, which stops proxies

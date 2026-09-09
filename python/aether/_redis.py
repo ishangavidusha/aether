@@ -101,8 +101,17 @@ class Consumer:
     """
 
     __slots__ = (
-        "backend", "topic", "group", "name", "count", "block_ms",
-        "claim_after_ms", "model", "_buffer", "_recovering", "_closed",
+        "_buffer",
+        "_closed",
+        "_recovering",
+        "backend",
+        "block_ms",
+        "claim_after_ms",
+        "count",
+        "group",
+        "model",
+        "name",
+        "topic",
     )
 
     def __init__(
@@ -216,7 +225,7 @@ class Consumer:
 class RedisBackend:
     """Connection and stream handling for durable topics."""
 
-    __slots__ = ("url", "prefix", "maxlen", "node_id", "_clients", "_lock")
+    __slots__ = ("_clients", "_lock", "maxlen", "node_id", "prefix", "url")
 
     def __init__(
         self,

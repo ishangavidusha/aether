@@ -10,7 +10,6 @@ import threading
 import uuid
 
 import httpx
-
 from aether import App, Request
 
 PORT = 8793

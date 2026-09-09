@@ -284,7 +284,7 @@ def graceful_shutdown() -> None:
     def slow_call():
         try:
             outcome["status"] = client.get("/work").status_code
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             outcome["error"] = f"{type(exc).__name__}: {exc}"
 
     caller = threading.Thread(target=slow_call)
@@ -322,7 +322,7 @@ def shutdown_grace_expires() -> None:
     def call():
         try:
             client.get("/forever")
-        except Exception:  # noqa: BLE001 - the point is that it does not finish
+        except Exception:
             pass
 
     caller = threading.Thread(target=call, daemon=True)
@@ -436,7 +436,7 @@ def main() -> None:
         try:
             step()
             print(f"  {step.__name__}: ok")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             failures.append(f"{step.__name__} raised {type(exc).__name__}: {exc}")
             print(f"  {step.__name__}: ERROR")
 

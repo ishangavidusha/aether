@@ -5,16 +5,14 @@ The point of this test is the milestone's exit criterion: one emit inside a
 handler must reach subscribers living on every worker loop, through real HTTP.
 """
 import asyncio
+import socket
 import sys
 import threading
-
-import socket
 import time
 
 import httpx
-from pydantic import BaseModel
-
 from aether import SSE, App, Event, Request
+from pydantic import BaseModel
 
 PORT = 8803
 BASE = f"http://127.0.0.1:{PORT}"
@@ -193,7 +191,8 @@ async def run() -> list[str]:
         if len(events) != len(want):
             bad.append(f"/shapes produced {len(events)} events, expected {len(want)}")
         else:
-            for i, (got, exp) in enumerate(zip(events, want)):
+            # Lengths are compared just above, so a mismatch here is a bug.
+            for i, (got, exp) in enumerate(zip(events, want, strict=True)):
                 for key, value in exp.items():
                     if got.get(key) != value:
                         bad.append(f"/shapes event {i}: {key}={got.get(key)!r}, expected {value!r}")
@@ -245,7 +244,7 @@ def slow_client_loses_nothing() -> list[str]:
             if not block:
                 break
             data += block
-    except socket.timeout:
+    except TimeoutError:
         bad.append("the bulk stream never finished")
     finally:
         sock.close()

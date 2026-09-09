@@ -34,7 +34,7 @@ class Reply:
     `headers` are added to the response.
     """
 
-    __slots__ = ("value", "status", "headers")
+    __slots__ = ("headers", "status", "value")
 
     def __init__(
         self,

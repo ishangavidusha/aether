@@ -12,9 +12,8 @@ node tails it. This is the claim that a single-process test cannot make.
 import asyncio
 import os
 
-from pydantic import BaseModel, Field
-
 from aether import SSE, App, Request
+from pydantic import BaseModel, Field
 
 NODE = os.environ.get("AETHER_NODE", "node")
 REDIS = os.environ.get("AETHER_REDIS", "redis://127.0.0.1:6399")

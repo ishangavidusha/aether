@@ -13,7 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::protocol::{Message, Role};
+use tokio_tungstenite::tungstenite::protocol::{Message, Role, WebSocketConfig};
 use tokio_tungstenite::WebSocketStream;
 
 use crate::queue::WorkerQueue;
@@ -244,10 +244,21 @@ pub async fn drive<S>(
 }
 
 /// Wrap an upgraded connection and run it to completion.
-pub async fn serve<S>(io: S, shared: Arc<Shared>, outgoing: mpsc::Receiver<Frame>)
-where
+///
+/// `max_message` caps a single incoming message. Without it tungstenite's own
+/// default applies, which is 64 MiB — four times what the server accepts as a
+/// request body, and not something the application had any way to change.
+pub async fn serve<S>(
+    io: S,
+    shared: Arc<Shared>,
+    outgoing: mpsc::Receiver<Frame>,
+    max_message: usize,
+) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let stream = WebSocketStream::from_raw_socket(io, Role::Server, None).await;
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(max_message))
+        .max_frame_size(Some(max_message));
+    let stream = WebSocketStream::from_raw_socket(io, Role::Server, Some(config)).await;
     drive(stream, shared, outgoing).await;
 }

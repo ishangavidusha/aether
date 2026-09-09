@@ -37,6 +37,8 @@ struct State {
     /// Cap on a request body. Without one, a single request can grow the
     /// process by several times the payload before the handler ever sees it.
     max_body: usize,
+    /// Largest single WebSocket message accepted, in bytes.
+    max_message: usize,
 }
 
 #[pyclass(name = "Server", module = "aether._core")]
@@ -46,6 +48,8 @@ pub struct Server {
     worker_count: usize,
     max_concurrency: usize,
     max_body: usize,
+    /// Largest single WebSocket message accepted, in bytes.
+    max_message: usize,
     debug: bool,
     request_timeout: Option<Duration>,
     shutdown_grace: Duration,
@@ -81,6 +85,7 @@ impl Server {
         workers: usize,
         max_concurrency: usize,
         max_body: usize,
+        max_message: usize,
         debug: bool,
         request_timeout_secs: f64,
         shutdown_grace_secs: f64,
@@ -94,6 +99,7 @@ impl Server {
             worker_count: workers.max(1),
             max_concurrency: max_concurrency.max(1),
             max_body,
+            max_message,
             debug,
             // Zero disables the timeout, for a service whose handlers are
             // legitimately long-running.
@@ -173,6 +179,7 @@ impl Server {
             next_worker: AtomicUsize::new(0),
             request_timeout: self.request_timeout,
             max_body: self.max_body,
+            max_message: self.max_message,
         });
 
         let addr: SocketAddr = format!("{}:{}", self.host, self.port)
@@ -500,10 +507,12 @@ async fn upgrade_websocket(
     }
 
     let upgrade = hyper::upgrade::on(&mut req);
+    // Copied out before the move: `state` does not travel into the task.
+    let max_message = state.max_message;
     tokio::spawn(async move {
         match upgrade.await {
             Ok(upgraded) => {
-                websocket::serve(TokioIo::new(upgraded), shared, outgoing).await;
+                websocket::serve(TokioIo::new(upgraded), shared, outgoing, max_message).await;
             }
             // The handler is already running; tell it the socket never opened.
             Err(_) => shared.mark_closed(),

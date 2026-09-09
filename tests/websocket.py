@@ -6,9 +6,8 @@ import threading
 
 import httpx
 import websockets
-from pydantic import BaseModel
-
 from aether import App, Request, Response
+from pydantic import BaseModel
 
 PORT = 8805
 BASE = f"http://127.0.0.1:{PORT}"
@@ -187,7 +186,7 @@ async def run() -> list[str]:
     try:
         async with websockets.connect(f"{WS}/private"):
             bad.append("an unauthorized socket was accepted")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
         if status != 401:
             bad.append(f"refused socket gave {type(exc).__name__} {status}, expected 401")
@@ -257,6 +256,50 @@ def registration_checks() -> list[str]:
     return bad
 
 
+async def message_size_cap() -> list[str]:
+    """A single message larger than the limit closes the connection.
+
+    Before this was configurable the limit was tungstenite's own 64 MiB —
+    four times what the same server accepts as a request body, and nothing the
+    application could change. Its own server, because the cap is set per
+    server and the shared one deliberately runs with the default.
+    """
+    from aether.testing import free_port
+
+    bad: list[str] = []
+    capped = App(openapi_url=None, docs_url=None, mcp_url=None)
+
+    @capped.websocket("/echo")
+    async def echo_capped(_: Request, ws):
+        async for message in ws:
+            await ws.send(f"got {len(message)}")
+
+    port = free_port()
+    server = capped.build_server("127.0.0.1", port, workers=1, max_message=4096)
+    thread = threading.Thread(target=server.serve, daemon=True)
+    thread.start()
+    await asyncio.sleep(0.4)
+
+    try:
+        async with websockets.connect(f"ws://127.0.0.1:{port}/echo", max_size=None) as ws:
+            await ws.send("x" * 1000)
+            got = await asyncio.wait_for(ws.recv(), 5)
+            if got != "got 1000":
+                bad.append(f"a message under the cap returned {got!r}")
+
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/echo", max_size=None) as ws:
+                await ws.send("x" * 20000)
+                got = await asyncio.wait_for(ws.recv(), 5)
+                bad.append(f"a message over the cap was accepted and returned {got!r}")
+        except Exception:
+            pass  # Refused, which is the point.
+    finally:
+        server.shutdown()
+        thread.join(timeout=10)
+    return bad
+
+
 def main() -> None:
     failures = registration_checks()
     print(f"registration checks: {'PASS' if not failures else 'FAIL'}")
@@ -274,6 +317,7 @@ def main() -> None:
     failures += http
 
     ws = asyncio.run(run())
+    ws += asyncio.run(message_size_cap())
     print(f"socket checks:       {'PASS' if not ws else 'FAIL'} "
           f"({WORKERS} loops, {CLIENTS} sockets)")
     failures += ws

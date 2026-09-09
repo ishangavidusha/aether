@@ -53,7 +53,7 @@ def _param_schema(param) -> dict[str, Any]:
 class Capability:
     """One route, exposed as an MCP tool."""
 
-    __slots__ = ("route", "name", "description", "input_schema", "_body_fields")
+    __slots__ = ("_body_fields", "description", "input_schema", "name", "route")
 
     def __init__(self, route: RouteInfo) -> None:
         self.route = route

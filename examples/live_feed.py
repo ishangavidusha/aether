@@ -17,9 +17,8 @@ Run it, open http://127.0.0.1:8000/ in two or three browser tabs, and post:
 import asyncio
 import datetime
 
-from pydantic import BaseModel, Field
-
 from aether import SSE, App, Event, Request, Response
+from pydantic import BaseModel, Field
 
 app = App(title="Live Feed", version="0.1.0")
 

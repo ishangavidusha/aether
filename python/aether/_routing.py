@@ -22,7 +22,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ._depends import Depends, bind as bind_dependencies, declared
+from ._depends import Depends
+from ._depends import bind as bind_dependencies
 from ._schema import (
     HAVE_PYDANTIC,
     RequestValidationError,
@@ -115,7 +116,7 @@ def path_params(path: str) -> list[tuple[str, bool]]:
 def _annotations(fn: Callable[..., Any]) -> dict[str, Any]:
     try:
         return typing.get_type_hints(fn)
-    except Exception:
+    except Exception:  # noqa: BLE001 - a probe that raises must answer None, not propagate
         # A forward reference we cannot resolve should not break registration;
         # unannotated parameters fall back to str.
         return dict(getattr(fn, "__annotations__", {}))

@@ -47,15 +47,59 @@ def _sysctl_int(name: str) -> int | None:
         size = ctypes.c_size_t(ctypes.sizeof(value))
         rc = libc.sysctlbyname(name.encode(), ctypes.byref(value), ctypes.byref(size), None, 0)
         return int(value.value) if rc == 0 and value.value > 0 else None
-    except Exception:
+    except Exception:  # noqa: BLE001 - a probe that raises must answer None, not propagate
         return None
+
+
+def _linux_performance_cores() -> int | None:
+    """The fast half of a hybrid Linux machine, if it says it has one.
+
+    Two kernels expose it differently and neither exists on a uniform machine,
+    which is the common case and correctly answers None:
+
+    * Intel hybrid parts list their P-cores in `/sys/devices/cpu_core/cpus`,
+      as a range list like `0-15,32-47`.
+    * ARM big.LITTLE gives every CPU a `cpu_capacity`; the big ones are those
+      at the maximum.
+    """
+    try:
+        with open("/sys/devices/cpu_core/cpus") as handle:
+            listed = handle.read().strip()
+        if listed:
+            total = 0
+            for part in listed.split(","):
+                if "-" in part:
+                    low, high = part.split("-")
+                    total += int(high) - int(low) + 1
+                else:
+                    total += 1
+            return total or None
+    except OSError:
+        pass
+
+    try:
+        import glob
+
+        capacities = []
+        for path in glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpu_capacity"):
+            with open(path) as handle:
+                capacities.append(int(handle.read().strip()))
+        if capacities and len(set(capacities)) > 1:
+            return capacities.count(max(capacities))
+    except (OSError, ValueError):
+        pass
+    return None
 
 
 def _performance_cores() -> int | None:
     """Cores that run at full speed. Apple Silicon splits these from the
     efficiency cores, and the sweep showed loops on efficiency cores losing
-    throughput rather than adding it."""
-    return _sysctl_int("hw.perflevel0.physicalcpu")
+    throughput rather than adding it. Linux hybrid machines split them too,
+    and a uniform machine has no split to report."""
+    macos = _sysctl_int("hw.perflevel0.physicalcpu")
+    if macos:
+        return macos
+    return _linux_performance_cores()
 
 
 def _physical_cores() -> int | None:
@@ -78,7 +122,7 @@ def _physical_cores() -> int | None:
             except OSError:
                 continue
         return len(pairs) or None
-    except Exception:
+    except Exception:  # noqa: BLE001 - a probe that raises must answer None, not propagate
         return None
 
 

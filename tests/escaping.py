@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 
-from aether import App, Event, Request, Response, SSE
+from aether import SSE, App, Event, Request, Response
 from aether.testing import free_port
 
 failures: list[str] = []
@@ -109,7 +109,7 @@ def fetch(port: int, path: str) -> str:
             if not block:
                 break
             chunks.append(block)
-    except socket.timeout:
+    except TimeoutError:
         pass
     sock.close()
     return b"".join(chunks).decode("utf-8", "replace")
@@ -194,7 +194,7 @@ def main() -> None:
             try:
                 step(port)
                 print(f"  {step.__name__}: ok")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 failures.append(f"{step.__name__} raised {type(exc).__name__}: {exc}")
                 print(f"  {step.__name__}: ERROR")
     finally:

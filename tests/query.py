@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """Query parameter binding: types, defaults, optionality, and error shapes."""
+import datetime
 import sys
 import threading
-
-import datetime
 import uuid
 
 import httpx
-
 from aether import App, Request
 
 PORT = 8799
@@ -49,7 +47,9 @@ async def typed(
 
 
 @app.get("/many")
-async def many(_: Request, tag: list[str], n: list[int] = []):
+# A list default is how an optional repeated parameter is declared, which is
+# the thing under test here.
+async def many(_: Request, tag: list[str], n: list[int] = []):  # noqa: B006
     return {"tag": tag, "n": n, "n_types": sorted({type(v).__name__ for v in n})}
 
 

@@ -64,8 +64,16 @@ class Subscription:
     """One subscriber's view of a topic. Async-iterable, and closeable."""
 
     __slots__ = (
-        "topic", "maxsize", "policy", "dropped",
-        "_buffer", "_loop", "_lock", "_getter", "_putters", "_closed",
+        "_buffer",
+        "_closed",
+        "_getter",
+        "_lock",
+        "_loop",
+        "_putters",
+        "dropped",
+        "maxsize",
+        "policy",
+        "topic",
     )
 
     def __init__(self, topic: "Topic", maxsize: int, policy: str, loop) -> None:
@@ -196,7 +204,7 @@ class Topic:
     skips its own node, so nobody sees a message twice.
     """
 
-    __slots__ = ("name", "maxsize", "policy", "backend", "_subs", "_lock", "_tail")
+    __slots__ = ("_lock", "_subs", "_tail", "backend", "maxsize", "name", "policy")
 
     def __init__(
         self,

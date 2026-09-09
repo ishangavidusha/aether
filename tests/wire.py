@@ -89,7 +89,7 @@ class Wire:
     def _fill(self) -> bool:
         try:
             block = self.sock.recv(65536)
-        except socket.timeout:
+        except TimeoutError:
             return False
         if not block:
             return False
@@ -322,7 +322,7 @@ def main() -> None:
             try:
                 step(port)
                 print(f"  {step.__name__}: ok")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 failures.append(f"{step.__name__} raised {type(exc).__name__}: {exc}")
                 print(f"  {step.__name__}: ERROR")
     finally:

@@ -5,9 +5,8 @@ import sys
 import threading
 
 import httpx
-from pydantic import BaseModel, Field
-
 from aether import App, Request
+from pydantic import BaseModel, Field
 
 PORT = 8801
 BASE = f"http://127.0.0.1:{PORT}"

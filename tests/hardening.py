@@ -13,7 +13,6 @@ import sys
 import threading
 
 import httpx
-
 from aether import App, Request
 
 PORT = 8807

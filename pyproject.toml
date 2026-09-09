@@ -21,3 +21,29 @@ docs = ["mkdocs-material>=9.5", "mkdocstrings[python]>=0.26", "ruff"]
 python-source = "python"
 module-name = "aether._core"
 features = ["pyo3/extension-module"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["target", "target-cov"]
+
+[tool.ruff.lint]
+# Deliberately narrower than "everything": these are the families that catch
+# real mistakes rather than restyle working code. `ruff format` is not run —
+# the Python here is hand-formatted consistently, and reformatting 3400 lines
+# would be 1162 changed lines of churn for no defect caught.
+select = ["E", "F", "I", "UP", "B", "BLE", "RUF"]
+ignore = [
+    # `Depends(...)` in a default argument is the dependency-injection API,
+    # not a mistake. Every handler that takes a dependency trips this.
+    "B008",
+    # `[first] + rest` is clearer than unpacking for the two places it appears.
+    "RUF005",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Suites and benchmarks catch broadly on purpose: a probe that lets an
+# unexpected exception escape reports nothing, and the point is the report.
+"tests/*" = ["BLE001"]
+"bench/*" = ["BLE001", "UP031", "E501"]
+"examples/*" = ["BLE001"]

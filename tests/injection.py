@@ -71,7 +71,9 @@ def no_cache() -> None:
         return len(calls)
 
     @app.get("/twice")
-    async def twice(_: Request, a=Depends(token, use_cache=False), b=Depends(token, use_cache=False)):
+    async def twice(
+        _: Request, a=Depends(token, use_cache=False), b=Depends(token, use_cache=False)
+    ):
         return {"a": a, "b": b}
 
     with TestClient(app) as c:
@@ -177,7 +179,7 @@ def main() -> None:
         try:
             step()
             print(f"  {step.__name__}: ok")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             failures.append(f"{step.__name__} raised {type(exc).__name__}: {exc}")
             print(f"  {step.__name__}: ERROR")
 

@@ -57,7 +57,10 @@ class WebSocket:
             waiter = self._loop.create_future()
             # `notify` fires immediately if something arrived in the meantime,
             # so this cannot miss a message that landed during the check above.
-            self._core.notify(self._loop, lambda: _resolve(waiter))
+            # The lambda captures `waiter`, which the loop rebinds — safe here
+            # because the coroutine cannot reach the rebinding until the await
+            # below returns, and it only returns once this callback has run.
+            self._core.notify(self._loop, lambda: _resolve(waiter))  # noqa: B023
             await waiter
 
     async def receive_json(self) -> Any:

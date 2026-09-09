@@ -76,7 +76,7 @@ def _b64decode(text: str) -> bytes:
 class Sessions:
     """Reads and writes a signed session cookie."""
 
-    __slots__ = ("secret", "cookie", "max_age", "secure", "same_site", "path")
+    __slots__ = ("cookie", "max_age", "path", "same_site", "secret", "secure")
 
     def __init__(
         self,

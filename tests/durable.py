@@ -278,7 +278,7 @@ async def main_async():
         try:
             await asyncio.wait_for(step(), 60)
             print(f"  {step.__name__}: ok")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             failures.append(f"{step.__name__} raised {type(exc).__name__}: {exc}")
             print(f"  {step.__name__}: ERROR")
 

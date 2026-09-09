@@ -92,7 +92,7 @@ class MCP:
                     "uri": f"{TOPIC_SCHEME}{name}",
                     "name": name,
                     "description": (
-                        f"Durable topic. Reading returns recent messages."
+                        "Durable topic. Reading returns recent messages."
                         if topic.durable
                         else "In-memory topic. Live only; it keeps no history to read."
                     ),
@@ -223,7 +223,9 @@ class MCP:
             # Batching was removed from MCP in 2025-06-18. Say so rather than
             # half-supporting it.
             return Response(
-                json.dumps(_err(None, INVALID_REQUEST, "batched requests are not supported")).encode(),
+                json.dumps(
+                    _err(None, INVALID_REQUEST, "batched requests are not supported")
+                ).encode(),
                 status=400,
                 content_type="application/json",
             )

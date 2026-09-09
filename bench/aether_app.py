@@ -1,9 +1,8 @@
 """Aether hello-world with CLI args, used by bench/run.py."""
 import argparse
 
-from pydantic import BaseModel
-
 from aether import App, Request
+from pydantic import BaseModel
 
 app = App()
 

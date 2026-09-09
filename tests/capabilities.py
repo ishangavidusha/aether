@@ -14,11 +14,11 @@ import sys
 import threading
 
 import httpx
+from aether import App, Request
+from aether._mcp import SUPPORTED_VERSIONS
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, Field
-
-from aether import App, Request
 
 PORT = 8811
 BASE = f"http://127.0.0.1:{PORT}"
@@ -104,6 +104,11 @@ async def drive_mcp() -> None:
             check(
                 info.server_info.name == "People",
                 f"serverInfo.name was {info.server_info.name!r}",
+            )
+            check(
+                info.protocol_version in SUPPORTED_VERSIONS,
+                f"the client negotiated {info.protocol_version!r}, which the server "
+                f"does not list in SUPPORTED_VERSIONS",
             )
             check(
                 info.capabilities.tools is not None,
@@ -194,6 +199,37 @@ async def drive_mcp() -> None:
             check(new_id not in DB, "delete_user did not take effect")
 
 
+#: What the installed SDK calls its newest revision, as of the last time
+#: someone looked. It runs ahead of what clients actually negotiate — this
+#: constant was once taken for the server's own version list, and the official
+#: client then refused to connect, which is why the check below compares it
+#: against a pin rather than trusting it.
+ACKNOWLEDGED_SDK_LATEST = "2026-07-28"
+
+
+def protocol_drift_check() -> None:
+    """Fail when the SDK learns a revision the server has never been tested at.
+
+    `SUPPORTED_VERSIONS` is hand-maintained, and the spec keeps revising. Left
+    alone it goes stale silently: a client negotiating a newer revision is
+    offered the newest the server knows and may simply refuse. This turns that
+    into a failure the next time `mcp` is upgraded, with instructions.
+    """
+    from mcp.types import LATEST_PROTOCOL_VERSION
+
+    if LATEST_PROTOCOL_VERSION == ACKNOWLEDGED_SDK_LATEST:
+        return
+    if LATEST_PROTOCOL_VERSION in SUPPORTED_VERSIONS:
+        return
+    check(
+        False,
+        f"the MCP SDK now names {LATEST_PROTOCOL_VERSION!r} as its latest, which the "
+        f"server has never been tested at. Drive a real client at it: if it works, add "
+        f"it to SUPPORTED_VERSIONS in python/aether/_mcp.py; if clients do not yet "
+        f"negotiate it, bump ACKNOWLEDGED_SDK_LATEST here",
+    )
+
+
 def wire_format_checks() -> None:
     """The SDK exposes snake_case, but the wire format is camelCase. Assert the
     bytes on the wire, not just what the client parsed."""
@@ -280,13 +316,15 @@ def main() -> None:
     try:
         asyncio.run(drive_mcp())
         print("mcp client (official SDK): ok")
-    except BaseException as exc:  # noqa: BLE001 - report every leaf cause
+    except BaseException as exc:
         flatten(exc)
         print("mcp client (official SDK): ERROR")
 
+    protocol_drift_check()
     wire_format_checks()
     http_and_openapi_checks()
-    print("http + openapi:            ok" if not failures else "http + openapi:            see below")
+    label = "ok" if not failures else "see below"
+    print(f"http + openapi:            {label}")
 
     if failures:
         print("\nfailures:")

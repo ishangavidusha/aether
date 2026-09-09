@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   lint:
-    name: rust lint
+    name: lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -30,6 +30,10 @@ jobs:
       # one by one in the source, each with a reason, so a new one cannot hide
       # among them.
       - run: cargo clippy --all-targets -- -D warnings
+
+      - uses: astral-sh/setup-uv@v7
+      - name: Python lint
+        run: uvx ruff check python/aether tests bench examples
 
   verify:
     name: ${{ matrix.label }}

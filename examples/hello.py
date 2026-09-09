@@ -3,9 +3,8 @@
 Run it, then open http://127.0.0.1:8000/docs
 """
 
-from pydantic import BaseModel, Field
-
 from aether import App, Request, Response
+from pydantic import BaseModel, Field
 
 app = App(title="Aether Example", version="0.1.0")
 

@@ -1,11 +1,11 @@
 import json
 import sys
-from collections.abc import Callable
 from typing import Any
 
 from . import _openapi
+from ._middleware import make_gate
+from ._middleware import wrap as wrap_middleware
 from ._response import Response
-from ._middleware import Reply, make_gate, wrap as wrap_middleware
 from ._routing import RouteInfo, build_route, route_shape
 from ._streams import DROP_OLDEST, Topic
 from ._workers import default_workers, gil_enabled
@@ -29,6 +29,11 @@ DEFAULT_SHUTDOWN_GRACE = 10.0
 #: Largest request body accepted, in bytes. Without a cap a single request can
 #: grow the process by several times the payload before a handler sees it.
 DEFAULT_MAX_BODY = 16 * 1024 * 1024
+
+#: Largest single WebSocket message accepted, in bytes. Matches the body limit
+#: rather than tungstenite's own 64 MiB, which was four times what the same
+#: server would accept over HTTP and could not be changed.
+DEFAULT_MAX_MESSAGE = 16 * 1024 * 1024
 
 
 class App:
@@ -303,6 +308,7 @@ class App:
         request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
         shutdown_grace: float = DEFAULT_SHUTDOWN_GRACE,
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        max_message: int = DEFAULT_MAX_MESSAGE,
     ) -> None:
         """Serve until interrupted.
 
@@ -314,7 +320,8 @@ class App:
         larger bursts of fast requests.
 
         `max_body` caps a request body; anything larger is answered 413 without
-        being buffered.
+        being buffered. `max_message` does the same for a single WebSocket
+        message, where the connection is closed rather than answered.
 
         `request_timeout` is how long to wait for a handler's first response
         before answering 504. It does not cut short a stream that has already
@@ -328,7 +335,7 @@ class App:
         """
         server = self.build_server(
             host, port, workers, max_concurrency, max_body, request_timeout,
-            shutdown_grace, max_connections, announce=True,
+            shutdown_grace, max_connections, max_message, announce=True,
         )
         try:
             server.serve()
@@ -345,6 +352,7 @@ class App:
         request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
         shutdown_grace: float = DEFAULT_SHUTDOWN_GRACE,
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        max_message: int = DEFAULT_MAX_MESSAGE,
         announce: bool = False,
     ):
         """Prepare a server without starting it.
@@ -396,6 +404,7 @@ class App:
             workers,
             max_concurrency,
             max_body,
+            max_message,
             self.debug,
             request_timeout,
             shutdown_grace,
