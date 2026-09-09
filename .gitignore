@@ -1,4 +1,7 @@
 /target
+/target-cov
+# An instrumented build writes these wherever it is run from.
+*.profraw
 /.venv*
 __pycache__/
 *.so

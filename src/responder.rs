@@ -239,17 +239,6 @@ impl Responder {
         Ok(())
     }
 
-    /// False once the client has disconnected, so a long-lived producer can
-    /// stop rather than push into a channel nobody reads.
-    #[getter]
-    fn connected(&self) -> PyResult<bool> {
-        let guard = self
-            .chunks
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("responder lock poisoned"))?;
-        Ok(guard.as_ref().is_some_and(|tx| !tx.is_closed()))
-    }
-
     /// Serialize a Python object to JSON *in Rust* and send it.
     /// This is the path we care about measuring: no `json.dumps` in Python.
     fn send_json(&self, status: u16, obj: &Bound<'_, PyAny>) -> PyResult<()> {

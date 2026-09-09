@@ -41,6 +41,17 @@ failure and runs against a real server on a real socket.
 Redis is unreachable, so a green run on a machine with no containers has not
 tested durable topics.
 
+Coverage of both halves:
+
+```bash
+make coverage        # Python, branch coverage, fails under 85%
+make coverage-rust   # Rust, via LLVM instrumentation
+```
+
+`coverage-rust` needs `rustup component add llvm-tools-preview`. It builds an
+instrumented extension, runs the suites against it, and rebuilds release
+afterwards so a benchmark never measures the instrumented build.
+
 ```bash
 make up            # redis
 make stack         # two nodes against one redis, for cross-process behaviour

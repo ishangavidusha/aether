@@ -2,7 +2,7 @@
 FT_PY  := 3.14.7+freethreaded
 GIL_PY := /opt/homebrew/bin/python3.14
 
-.PHONY: venvs build build-ft build-gil docs docs-serve coverage run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil verify verify-gil up down logs image stack stack-down clean
+.PHONY: venvs build build-ft build-gil docs docs-serve coverage coverage-rust run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil verify verify-gil up down logs image stack stack-down clean
 
 venvs:
 	uv venv --python $(FT_PY) .venv
@@ -69,6 +69,38 @@ coverage: build-ft
 	@.venv/bin/python -m coverage html -q -d htmlcov
 	@echo "html report: htmlcov/index.html"
 
+# Coverage of the Rust half, via LLVM source-based instrumentation.
+#
+# The Rust runs as a Python extension driven by the Python suites, so this is
+# not `cargo test`: build the extension instrumented, run the suites against it,
+# then merge the .profraw each process leaves behind. Needs the llvm-tools
+# component (`rustup component add llvm-tools-preview`).
+#
+# Built into target-cov/ and rebuilt release at the end, so this never leaves an
+# unoptimised extension installed for the next benchmark to measure.
+LLVM_BIN := $(shell rustc --print sysroot)/lib/rustlib/$(shell rustc -vV | sed -n 's/^host: //p')/bin
+
+coverage-rust:
+	@rm -rf target-cov/prof target-cov/html && mkdir -p target-cov/prof
+	CARGO_TARGET_DIR=target-cov RUSTFLAGS="-Cinstrument-coverage" \
+		VIRTUAL_ENV=$(CURDIR)/.venv .venv/bin/maturin develop
+	@for s in $(SUITES); do \
+		LLVM_PROFILE_FILE="$(CURDIR)/target-cov/prof/%p-%m.profraw" \
+			.venv/bin/python tests/$$s.py >/dev/null 2>&1 || echo "suite failed: $$s"; \
+	done
+	@$(LLVM_BIN)/llvm-profdata merge -sparse target-cov/prof/*.profraw \
+		-o target-cov/aether.profdata
+	@$(LLVM_BIN)/llvm-cov report --instr-profile=target-cov/aether.profdata \
+		--object python/aether/_core.cpython-314t-darwin.so \
+		--ignore-filename-regex='(/.cargo/|/rustc/|library/std)'
+	@$(LLVM_BIN)/llvm-cov show --instr-profile=target-cov/aether.profdata \
+		--object python/aether/_core.cpython-314t-darwin.so \
+		--format=html --output-dir=target-cov/html \
+		--ignore-filename-regex='(/.cargo/|/rustc/|library/std)'
+	@echo "html report: target-cov/html/index.html"
+	@echo "restoring the release build"
+	@$(MAKE) --no-print-directory build-ft
+
 # --- public documentation ---------------------------------------------------
 # Built from the GIL venv, which is where the docs tooling lives. mkdocstrings
 # imports the package for the API reference, so the extension has to be built
@@ -114,4 +146,4 @@ stack-down:
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.stack.yml down -v
 
 clean:
-	rm -rf target .venv .venv-gil bench/results site htmlcov
+	rm -rf target target-cov .venv .venv-gil bench/results site htmlcov

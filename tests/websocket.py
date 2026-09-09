@@ -74,6 +74,18 @@ async def private(_: Request, ws):
     await ws.send("welcome")
 
 
+@app.websocket("/private/{room}", authorize=members_only)
+async def private_room(_: Request, ws, room: str, level: int = 1):
+    """An authorizer *and* path parameters.
+
+    Rust coverage showed this combination had never run: the authorizer is
+    dispatched as a separate queue item, and its parameters are copied for it,
+    so a gated route with no parameters never exercises the copy. Both routes
+    existed; only the pairing was missing.
+    """
+    await ws.send(f"{room}:{level}")
+
+
 @app.post("/publish/{text}")
 async def publish(_: Request, text: str):
     return {"delivered": await app.topic("bus").emit({"text": text})}
@@ -86,6 +98,20 @@ async def plain(_: Request):
 
 async def run() -> list[str]:
     bad: list[str] = []
+
+    # A gated route that also has parameters: refused without the header,
+    # and given its coerced parameters once accepted.
+    try:
+        async with websockets.connect(f"{WS}/private/lounge?level=7") as ws:
+            bad.append("a gated socket with parameters accepted an unauthorized client")
+    except Exception:
+        pass
+    async with websockets.connect(
+        f"{WS}/private/lounge?level=7", additional_headers={"authorization": "Bearer good"}
+    ) as ws:
+        got = await asyncio.wait_for(ws.recv(), 5)
+        if got != "lounge:7":
+            bad.append(f"a gated socket with parameters received {got!r}")
 
     async with websockets.connect(f"{WS}/echo") as ws:
         await ws.send("hello")
