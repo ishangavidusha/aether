@@ -64,8 +64,22 @@ is the pattern: each case names a defect that was demonstrated against a running
 server before it was fixed.
 
 **A performance claim needs a benchmark**, with the machine and the method
-recorded. Check `os.getloadavg()` before trusting a number — a leftover load
-from a previous run reports regressions that do not exist.
+recorded. The runners do the recording: every result file carries a fingerprint
+of the host and a preflight verdict, and a run that started on a busy machine,
+a `powersave` governor, or a host stealing CPU from its guest is marked
+untrustworthy rather than quietly kept.
+
+```bash
+make machine       # what this host is, and whether it is fit to measure on
+make bench-all     # the whole battery, both builds, into one archive
+```
+
+`make bench-all` refuses to run on a host that fails preflight; pass
+`STRICT=` to override, and `PROFILE=quick` for a two-minute sanity pass.
+A fresh Linux benchmark host is set up by `bench/provision.sh`.
+
+Numbers from a shared vCPU are not reproducible and no amount of averaging
+makes them so. Measure on dedicated CPU.
 
 **Protocol work is verified against a real client**, not against a reading of
 the specification. The OpenAPI document goes through `openapi-spec-validator`;

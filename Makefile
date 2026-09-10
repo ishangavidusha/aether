@@ -1,8 +1,10 @@
 # Aether milestone-1 spike. Two venvs: .venv (free-threaded 3.14t) and .venv-gil (standard 3.14).
 FT_PY  := 3.14.7+freethreaded
-GIL_PY := /opt/homebrew/bin/python3.14
+# Homebrew's 3.14 on this Mac, so its numbers stay comparable with every run
+# recorded before benchmarks ever left it. Anywhere else, uv fetches its own.
+GIL_PY := $(shell test -x /opt/homebrew/bin/python3.14 && echo /opt/homebrew/bin/python3.14 || echo 3.14)
 
-.PHONY: venvs build build-ft build-gil docs docs-serve coverage coverage-rust lint run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil verify verify-gil up down logs image stack stack-down clean
+.PHONY: machine bench-collect venvs build build-ft build-gil docs docs-serve coverage coverage-rust lint run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil bench-all verify verify-gil up down logs image stack stack-down clean
 
 venvs:
 	uv venv --python $(FT_PY) .venv
@@ -117,6 +119,61 @@ docs: build-gil
 
 docs-serve: build-gil
 	.venv-gil/bin/python -m mkdocs serve
+
+# --- a measurement session --------------------------------------------------
+# One command per host. Everything below records the machine it ran on, so
+# results from a cloud instance and results from this Mac can sit in the same
+# directory without pretending to be comparable.
+#
+# STRICT is on by default: a host that fails preflight — powersave governor,
+# existing load, too few descriptors — refuses to produce numbers rather than
+# producing misleading ones. `make bench-all STRICT=` overrides that when a
+# rough number on a busy machine is genuinely what is wanted.
+#
+# PROFILE=quick is a two-minute sanity pass, for checking the harness works on
+# a new host before committing an hour to it.
+PROFILE ?= full
+STRICT  ?= --strict
+
+ifeq ($(PROFILE),quick)
+RUN_ARGS   := --duration 3 --warmup 1
+CPU_ARGS   := --duration 3
+SWEEP_ARGS := --duration 2 --costs 0 50 500
+else
+RUN_ARGS   := --duration 10
+CPU_ARGS   := --duration 6
+SWEEP_ARGS := --duration 5
+endif
+
+bench-all: build
+	@echo "== hello world, free-threaded"
+	.venv/bin/python bench/run.py --python .venv/bin/python $(RUN_ARGS) $(STRICT)
+	@echo "== hello world, gil"
+	.venv-gil/bin/python bench/run.py --python .venv-gil/bin/python $(RUN_ARGS) $(STRICT)
+	@echo "== handler parallelism, free-threaded"
+	.venv/bin/python bench/cpu.py --python .venv/bin/python $(CPU_ARGS) $(STRICT)
+	@echo "== handler parallelism, gil"
+	.venv-gil/bin/python bench/cpu.py --python .venv-gil/bin/python $(CPU_ARGS) $(STRICT)
+	@echo "== handler cost against loop count, free-threaded"
+	.venv/bin/python bench/sweep.py --python .venv/bin/python $(SWEEP_ARGS) $(STRICT)
+	@echo "== handler cost against loop count, gil"
+	.venv-gil/bin/python bench/sweep.py --python .venv-gil/bin/python $(SWEEP_ARGS) $(STRICT)
+	@$(MAKE) --no-print-directory bench-collect
+
+# One tarball to copy off a host that is about to be destroyed. Named for the
+# machine, so two of them never overwrite each other.
+# Either venv can answer; a host that only built one still collects.
+BENCH_PY := $(shell test -x .venv/bin/python && echo .venv/bin/python || echo .venv-gil/bin/python)
+
+bench-collect:
+	@id=$$($(BENCH_PY) -c "import sys;sys.path.insert(0,'bench');\
+import machine;print(machine.machine_id(machine.fingerprint()))"); \
+	out=bench/results-$$id-$$(date +%Y%m%d-%H%M%S).tar.gz; \
+	tar czf $$out -C bench results && echo "collected $$out"
+
+machine:
+	@$(BENCH_PY) bench/machine.py
+
 
 sweep: build-ft
 	.venv/bin/python bench/sweep.py --python .venv/bin/python

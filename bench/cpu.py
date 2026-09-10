@@ -18,6 +18,11 @@ import sys
 import time
 from pathlib import Path
 
+# bench/ is a directory of scripts rather than a package, so a sibling
+# import needs the directory on the path first.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from machine import Session, worker_ladder
+
 ROOT = Path(__file__).resolve().parent.parent
 PORT = 8767
 
@@ -71,14 +76,15 @@ def main():
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--duration", type=int, default=6)
     ap.add_argument("--conns", type=int, default=32)
-    ap.add_argument("--workers", type=int, nargs="*", default=[1, 2, 4, 8])
+    ap.add_argument("--workers", type=int, nargs="*", default=worker_ladder())
+    ap.add_argument("--strict", action="store_true",
+                    help="refuse to measure when the host fails preflight")
     args = ap.parse_args()
 
     py = str(Path(args.python).absolute())
-    info = subprocess.run(
-        [py, "-c", "import sys;print('gil' if sys._is_gil_enabled() else 'free-threaded')"],
-        capture_output=True, text=True, check=True).stdout.strip()
-    print(f"build: {info}   load: {args.conns} conns x {args.duration}s   handler: 20k-iteration loop\n")
+    session = Session("cpu", executable=py, conns=args.conns, strict=args.strict)
+    session.announce()
+    print(f"load: {args.conns} conns x {args.duration}s   handler: 20k-iteration loop\n")
 
     rows = [r for w in args.workers if (r := measure(py, w, args.duration, args.conns))]
     base = rows[0]["rps"] if rows else 1
@@ -86,9 +92,7 @@ def main():
     for r in rows:
         print(f"{r['workers']:>6}{r['rps']:>10.0f}{r['rps'] / base:>9.2f}x{r['p50_ms']:>10.2f}{r['p99_ms']:>10.2f}")
 
-    out = ROOT / "bench" / "results" / f"cpu-{'ft' if info != 'gil' else 'gil'}-{time.strftime('%Y%m%d-%H%M%S')}.json"
-    out.parent.mkdir(exist_ok=True)
-    out.write_text(json.dumps({"build": info, "rows": rows}, indent=2))
+    out = session.finish({"args": vars(args), "rows": rows})
     print(f"\nsaved {out.relative_to(ROOT)}")
 
 

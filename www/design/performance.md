@@ -8,16 +8,35 @@ connections for 8 seconds. `raw` targets are a bare ASGI callable returning a
 pre-encoded body, which is the best case for the comparison servers. `Nw` means
 one OS process per CPU.
 
-**Machine.** Apple Silicon, macOS 25.6, 10 cores (4 performance + 6
-efficiency). Python 3.14.7, both builds, installed by uv. Rust 1.92, release
-profile with fat LTO. uvicorn 0.52.4, granian 2.8.2, FastAPI 0.141.1.
+**Machine.** The numbers below come from Apple Silicon, macOS 25.6, 10 cores
+(4 performance + 6 efficiency). Python 3.14.7, both builds, installed by uv.
+Rust 1.92, release profile with fat LTO. uvicorn 0.52.4, granian 2.8.2,
+FastAPI 0.141.1.
+
+Every result file records the host that produced it — CPU model, core counts,
+memory, virtualisation, descriptor limits, and what worker-count detection made
+of all of it — so results from different machines can be compared without
+guessing at what the difference was.
 
 ```bash
 make bench        # hello world, free-threaded
 make bench-gil    # hello world, GIL build
 make bench-cpu    # CPU-bound handler scaling
 make sweep        # handler cost against loop count
+make bench-all    # all of the above, both builds, collected into one archive
+make machine      # print the host fingerprint and the preflight checks
 ```
+
+The worker-count ladders are derived from the machine rather than fixed, so a
+larger host measures the larger loop counts that only exist there.
+
+**Preflight.** Four conditions make a measurement worthless and none of them is
+visible in the number it produced: a `powersave` CPU governor, existing load, a
+hypervisor stealing CPU from the guest, and a file-descriptor limit too low for
+the connections being opened. Each runner checks all four, records the verdict
+in the result file, and with `--strict` refuses to measure at all. A benchmark
+host is provisioned with `bench/provision.sh`, which sets the first and third
+of those straight and disables background package updates.
 
 !!! warning "Read this before quoting any number here"
 
@@ -27,10 +46,15 @@ make sweep        # handler cost against loop count
 
     **Record the load average.** A machine still busy from a previous run
     reports regressions that do not exist; one such 3.5% drop traced entirely
-    to leftover benchmark load. The runners capture `os.getloadavg()` with
-    every result and warn above 2.0. Absolute numbers compare across sessions
-    only at similar starting load; ratios inside one run are always sound,
-    since every target faces the same machine.
+    to leftover benchmark load. Every result carries the load average before
+    and after, and a run that started above 2.0 is marked untrustworthy.
+    Absolute numbers compare across sessions only at similar starting load;
+    ratios inside one run are always sound, since every target faces the same
+    machine.
+
+    **A shared vCPU cannot produce a reproducible number.** Steal time is
+    measured across every run and reported; a host that gives away CPU
+    mid-measurement invalidates it, and no amount of averaging recovers it.
 
     **Never benchmark through Docker.** Docker Desktop on macOS measured 3.4x
     slower for the same image, and the cost is the VM's port boundary, not the

@@ -18,8 +18,12 @@ import sys
 import time
 from pathlib import Path
 
+# bench/ is a directory of scripts rather than a package, so a sibling
+# import needs the directory on the path first.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from machine import Session
+
 ROOT = Path(__file__).resolve().parent.parent
-RESULTS = ROOT / "bench" / "results"
 PORT = 8765
 
 
@@ -58,6 +62,25 @@ def target_cmds(py: str, workers: int) -> dict[str, tuple[list[str], str, list[s
         "granian-fastapi-body":  (fastapi_gr, "/users", POST_JSON),
         "granian-fastapi-query": (fastapi_gr, "/search?q=abc&limit=5", []),
     }
+
+
+def installed(py: str, module: str) -> bool:
+    """Whether a comparison target can run at all on this interpreter.
+
+    A fresh machine has aether built and nothing else. Skipping a target with a
+    reason beats twenty lines of tracebacks that all say the same thing.
+    """
+    return subprocess.run(
+        [py, "-c", f"import {module}"], capture_output=True, text=True
+    ).returncode == 0
+
+
+def requirement(name: str) -> str | None:
+    """The import a target needs, or None when it only needs aether."""
+    for prefix, module in (("uvicorn", "uvicorn"), ("granian", "granian")):
+        if name.startswith(prefix):
+            return module
+    return "fastapi" if "fastapi" in name else None
 
 
 def wait_port(port: int, proc: subprocess.Popen, timeout: float = 20.0) -> bool:
@@ -124,31 +147,29 @@ def main() -> None:
     ap.add_argument("--warmup", type=int, default=2)
     ap.add_argument("--conns", type=int, default=64)
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1)
+    ap.add_argument("--strict", action="store_true",
+                    help="refuse to measure when the host fails preflight")
     ap.add_argument("targets", nargs="*")
     args = ap.parse_args()
 
     py = str(Path(args.python).absolute())  # keep the venv symlink
 
-    # Recorded because it burned an hour once: a "3.5% regression" turned out to
-    # be nothing but leftover load from the previous benchmark run.
-    load_before = os.getloadavg()
-    if load_before[0] > 2.0:
-        print(f"WARNING: 1-minute load average is {load_before[0]:.1f}. Results will be "
-              f"depressed and are not comparable with a quiet run.\n", file=sys.stderr)
-    info = subprocess.run(
-        [py, "-c", "import sys;print(sys.version.split()[0], 'gil' if sys._is_gil_enabled() else 'free-threaded')"],
-        capture_output=True, text=True, check=True).stdout.strip()
-    print(f"python: {py}\nbuild : {info}")
-    print(f"load  : {args.conns} conns x {args.duration}s (warmup {args.warmup}s)")
-    print(f"sysload: {load_before[0]:.2f} at start\n")
+    session = Session("hello", executable=py, conns=args.conns, strict=args.strict)
+    session.announce()
+    print(f"load  : {args.conns} conns x {args.duration}s (warmup {args.warmup}s)\n")
 
     cmds = target_cmds(py, args.workers)
     names = args.targets or list(cmds)
-    rows = []
+    rows, skipped = [], []
     for name in names:
         if name not in cmds:
             print(f"unknown target {name!r}; choose from {', '.join(cmds)}", file=sys.stderr)
             sys.exit(2)
+        need = requirement(name)
+        if need and not installed(py, need):
+            print(f"-- {name}: skipped, {need} is not installed on this interpreter")
+            skipped.append(name)
+            continue
         print(f"-> {name}", flush=True)
         row = run_target(name, *cmds[name], args)
         if row:
@@ -159,16 +180,7 @@ def main() -> None:
     for r in rows:
         print(f"{r['target']:<18}{r['rps']:>12.0f}{r['p50_ms']:>10.2f}{r['p99_ms']:>10.2f}{r['success']*100:>8.1f}")
 
-    RESULTS.mkdir(exist_ok=True)
-    tag = "ft" if "free-threaded" in info else "gil"
-    out = RESULTS / f"{tag}-{time.strftime('%Y%m%d-%H%M%S')}.json"
-    out.write_text(json.dumps({
-        "python": info,
-        "args": vars(args),
-        "loadavg_before": load_before,
-        "loadavg_after": os.getloadavg(),
-        "rows": rows,
-    }, indent=2))
+    out = session.finish({"args": vars(args), "rows": rows, "skipped": skipped})
     print(f"\nsaved {out.relative_to(ROOT)}")
 
 

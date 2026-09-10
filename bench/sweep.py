@@ -18,6 +18,11 @@ import sys
 import time
 from pathlib import Path
 
+# bench/ is a directory of scripts rather than a package, so a sibling
+# import needs the directory on the path first.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from machine import Session, worker_ladder
+
 ROOT = Path(__file__).resolve().parent.parent
 PORT = 8769
 
@@ -97,24 +102,20 @@ def main():
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--duration", type=int, default=5)
     ap.add_argument("--conns", type=int, default=64)
-    ap.add_argument("--loops", type=int, nargs="*", default=[1, 2, 4, 8])
+    ap.add_argument("--loops", type=int, nargs="*", default=worker_ladder())
     ap.add_argument("--costs", type=float, nargs="*",
                     default=[0, 5, 10, 25, 50, 100, 250, 500],
                     help="target handler CPU cost in microseconds")
+    ap.add_argument("--strict", action="store_true",
+                    help="refuse to measure when the host fails preflight")
     args = ap.parse_args()
 
     py = str(Path(args.python).absolute())
-    build = subprocess.run(
-        [py, "-c", "import sys;print('gil' if sys._is_gil_enabled() else 'free-threaded')"],
-        capture_output=True, text=True, check=True).stdout.strip()
-
-    load_before = os.getloadavg()
-    if load_before[0] > 2.0:
-        print(f"WARNING: 1-minute load average is {load_before[0]:.1f}; results will be "
-              f"depressed.\n", file=sys.stderr)
+    session = Session("sweep", executable=py, conns=args.conns, strict=args.strict)
+    session.announce()
 
     ns = calibrate(py)
-    print(f"build: {build}   load: {args.conns} conns x {args.duration}s")
+    print(f"load: {args.conns} conns x {args.duration}s")
     print(f"calibration: {ns:.2f} ns per loop iteration\n")
 
     grid, rows = {}, []
@@ -152,11 +153,8 @@ def main():
     print(f"\ncrossover: extra loops first win by >5% at a handler cost of "
           f"{'~%.0f us' % crossover if crossover is not None else 'never (in this range)'}")
 
-    out = ROOT / "bench" / "results" / f"sweep-{'ft' if build != 'gil' else 'gil'}-{time.strftime('%Y%m%d-%H%M%S')}.json"
-    out.parent.mkdir(exist_ok=True)
-    out.write_text(json.dumps({"build": build, "ns_per_iter": ns,
-                               "loadavg_before": load_before,
-                               "crossover_us": crossover, "rows": rows}, indent=2))
+    out = session.finish({"args": vars(args), "ns_per_iter": ns,
+                          "crossover_us": crossover, "rows": rows})
     print(f"saved {out.relative_to(ROOT)}")
 
 
