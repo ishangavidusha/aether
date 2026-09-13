@@ -111,6 +111,17 @@ impl Responder {
             .map_err(|_| PyRuntimeError::new_err("responder lock poisoned"))?
             .take()
             .ok_or_else(|| PyRuntimeError::new_err("response already sent"))?;
+        // A complete reply finishes the request: the handler has returned and
+        // nothing else runs on it. Release the slot before the reply can reach
+        // the client, not after. Released later, in `finish`, a client that
+        // sent its next request as soon as this one answered could find the
+        // loop still counted busy, tied with a loop genuinely held by a
+        // CPU-bound handler, and be assigned to the held one — seen on CI as a
+        // 255 ms wait (least-loaded assignment, D-031). A stream keeps its slot
+        // until `finish`, because it is still being served.
+        if matches!(reply.body, Body::Full(_)) {
+            self.release_once();
+        }
         // If the client went away the receiver is gone; that's not a Python error.
         let _ = tx.send(reply);
         Ok(())
