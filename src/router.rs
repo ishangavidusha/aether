@@ -149,6 +149,8 @@ pub struct RouteSpec {
     pub websocket: bool,
     /// Has an authorizer that must approve the upgrade first.
     pub gated: bool,
+    /// Takes its body as a `BodyStream` rather than collected up front.
+    pub streaming: bool,
 }
 
 /// A parameter that was missing or would not coerce. Rendered in the shape
@@ -193,8 +195,8 @@ pub struct Matched {
 /// (name, type, source, presence, repeated) from the Python side.
 pub type SpecTuple = (String, String, String, String, bool);
 
-/// (method, path, params, is_websocket, has_authorizer)
-pub type RouteTuple = (String, String, Vec<SpecTuple>, bool, bool);
+/// (method, path, params, is_websocket, has_authorizer, streams_body)
+pub type RouteTuple = (String, String, Vec<SpecTuple>, bool, bool, bool);
 
 pub struct Router {
     by_method: HashMap<String, Matcher<usize>>,
@@ -207,12 +209,15 @@ impl Router {
         let mut by_method: HashMap<String, Matcher<usize>> = HashMap::new();
         let mut specs = Vec::with_capacity(routes.len());
 
-        for (index, (method, path, params, websocket, gated)) in routes.iter().enumerate() {
+        for (index, (method, path, params, websocket, gated, streaming)) in
+            routes.iter().enumerate()
+        {
             let mut spec = RouteSpec {
                 params: Vec::new(),
                 has_query: false,
                 websocket: *websocket,
                 gated: *gated,
+                streaming: *streaming,
             };
             for (name, kind, source, presence, repeated) in params {
                 let kind = ParamKind::parse(kind)

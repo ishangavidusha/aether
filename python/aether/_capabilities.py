@@ -53,10 +53,14 @@ def _param_schema(param) -> dict[str, Any]:
 class Capability:
     """One route, exposed as an MCP tool."""
 
-    __slots__ = ("_body_fields", "description", "input_schema", "name", "route")
+    __slots__ = ("_body_fields", "description", "input_schema", "name", "route", "target")
 
-    def __init__(self, route: RouteInfo) -> None:
+    def __init__(self, route: RouteInfo, target: Any = None) -> None:
         self.route = route
+        #: What runs when the tool is called: the handler inside its routers'
+        #: middleware and the app's exception handlers. Without it a tool call
+        #: skipped a router's auth middleware that the same route over HTTP ran.
+        self.target = target
         self.name = getattr(route.fn, "__name__", "handler")
         self.description = self._describe(route)
         self._body_fields: set[str] = set()
@@ -147,12 +151,17 @@ class Capability:
                 unknown[key] = value
         return path_and_query, body, unknown
 
-    async def invoke(self, arguments: dict[str, Any]) -> Any:
+    async def invoke(self, arguments: dict[str, Any], parent: Any = None) -> Any:
         """Call the handler directly, without going back out over HTTP.
 
         The synthesized request is what lets the same handler serve both, and
         means the body still passes through the route's own pydantic
         validation rather than a second copy of it.
+
+        `parent` is the request that carried the call. Its headers and worker
+        context are copied onto the synthesized one, so a router's middleware
+        checks the credentials the agent actually sent, and the handler sees
+        the same `request.state` it would over HTTP.
         """
         params, body, unknown = self._split(arguments or {})
         if unknown:
@@ -183,17 +192,20 @@ class Capability:
             path,
             None,
             json.dumps(body).encode() if body else b"",
+            None if parent is None else list(parent.headers.items()),
+            None if parent is None else parent._context,
         )
-        return await self.route.target(request, **params)
+        target = self.target if self.target is not None else self.route.target
+        return await target(request, **params)
 
 
-def build(routes: list[RouteInfo]) -> dict[str, Capability]:
+def build(routes: list[RouteInfo], compose: Any = None) -> dict[str, Capability]:
     """Capabilities for every route that asked to be one."""
     capabilities: dict[str, Capability] = {}
     for route in routes:
         if not route.tool or route.websocket:
             continue
-        capability = Capability(route)
+        capability = Capability(route, None if compose is None else compose(route))
         if capability.name in capabilities:
             raise CapabilityError(
                 f"two routes export a tool named {capability.name!r}; "

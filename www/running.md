@@ -84,6 +84,12 @@ Aether speaks HTTP/1.1 with no TLS and no HTTP/2. **Put a terminating proxy in
 front of it** — nginx, Caddy, a cloud load balancer — and let that handle TLS,
 HTTP/2 and whatever else the edge needs.
 
+If the proxy also adds CORS headers, configure CORS in one place only: two
+`Access-Control-Allow-Origin` headers on one response make a browser reject it.
+A proxy that buffers request bodies defeats a [streaming
+upload](guide/forms.md#streaming-a-body); turn request buffering off for those
+routes (in nginx, `proxy_request_buffering off`).
+
 ## Containers
 
 The repository ships a multi-stage `Dockerfile` that installs free-threaded

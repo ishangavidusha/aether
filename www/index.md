@@ -26,9 +26,10 @@ app.run(port=8000)
 Three things, in one process:
 
 **A REST framework.** A radix-tree router with typed path and query parameters
-coerced in Rust, pydantic request and response bodies, middleware, dependency
-injection, sessions, and OpenAPI 3.1 generated from the same route metadata the
-router uses.
+coerced in Rust, pydantic request and response bodies, forms and file uploads,
+streaming request bodies, routers, middleware, exception handlers, dependency
+injection, per-worker lifespans, CORS, sessions, and OpenAPI 3.1 generated from
+the same route metadata the router uses.
 
 **A stream engine.** Named topics with fan-out, backpressure policies, and
 subscribers spread across every worker loop in the process. Server-Sent Events
@@ -69,6 +70,8 @@ a single worker loop.
 
 - [Install](install.md) — get a server running.
 - [Routing](guide/routing.md) — paths, methods, typed parameters.
+- [Routers](guide/routers.md) and [Lifespan](guide/lifespan.md) — an app in
+  more than one module, with resources that live as long as the server.
 - [Topics](streams/topics.md) — fan-out, backpressure, cross-loop delivery.
 - [Agents](agents.md) — one handler, served to humans and to models.
 - [Why Aether is built this way](design/why.md) — the design decisions and their cost.

@@ -12,11 +12,15 @@ async def create_user(_: Request): ...
 @app.put("/users/{user_id}")
 async def replace_user(_: Request, user_id: int): ...
 
+@app.patch("/users/{user_id}")
+async def update_user(_: Request, user_id: int): ...
+
 @app.delete("/users/{user_id}")
 async def delete_user(_: Request, user_id: int): ...
 ```
 
-`app.route(method, path)` handles anything else.
+`app.route(method, path)` handles anything else. To declare routes in more than
+one module, use a [router](routers.md).
 
 Every handler takes the request as its first argument. Name it `_` when you do
 not need it; it is still passed.

@@ -19,6 +19,10 @@ async def me(request: Request):
 | `headers` | every header, lowercased, as a dict |
 | `cookies` | parsed cookies as a dict |
 | `header(name, default=None)` | one header by name, case-insensitively |
+| `form(max_parts=1000)` | the body parsed as a form; see [Forms and uploads](forms.md) |
+| `stream()` | the body as an async iterator of chunks; see [Forms and uploads](forms.md#streaming-a-body) |
+| `state` | what the app's lifespans yielded, read-only; see [Lifespan](lifespan.md) |
+| `app` | the `App` serving the request |
 
 ## Headers are lazy
 
@@ -36,7 +40,8 @@ keeps a malformed request from becoming a `500`.
 why it needs no locking even when several worker loops are running in the same
 process on a free-threaded build. Pass values between middleware and handlers
 through a `ContextVar` or a dependency, not by attaching attributes to the
-request.
+request. `request.state` is read-only for the same reason: every request on a
+worker loop shares it.
 
 ## Repeated headers
 

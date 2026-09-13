@@ -20,6 +20,8 @@ import json
 from typing import Any
 
 from ._capabilities import Capability, CapabilityError
+from ._logging import logger
+from ._middleware import Reply, merge
 from ._response import Response
 from ._schema import is_model_instance
 
@@ -50,6 +52,10 @@ def _ok(request_id: Any, result: Any) -> dict:
 
 def _err(request_id: Any, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+def _tool_error(text: str) -> dict:
+    return {"content": [{"type": "text", "text": text}], "isError": True}
 
 
 def _jsonable(value: Any) -> Any:
@@ -129,7 +135,7 @@ class MCP:
 
     # ---- invocation -------------------------------------------------------
 
-    async def call_tool(self, params: dict) -> dict:
+    async def call_tool(self, params: dict, parent: Any = None) -> dict:
         name = params.get("name")
         capability = self.capabilities.get(name)
         if capability is None:
@@ -138,16 +144,30 @@ class MCP:
             raise CapabilityError(f"no tool named {name!r}")
 
         try:
-            result = await capability.invoke(params.get("arguments") or {})
+            result = await capability.invoke(params.get("arguments") or {}, parent)
+        except CapabilityError as exc:
+            # About the arguments the agent sent, written for it.
+            return _tool_error(str(exc))
         except Exception as exc:  # noqa: BLE001 - reported to the caller, not raised
-            return {
-                "content": [{"type": "text", "text": f"{type(exc).__name__}: {exc}"}],
-                "isError": True,
-            }
+            # Exception text never goes to a client, and an agent is a client.
+            # It used to: any raising tool returned `TypeName: message`, the
+            # same leak an HTTP 500 is built to prevent.
+            logger.exception("tool raised", exc_info=exc, extra={"tool": name})
+            detail = f"{type(exc).__name__}: {exc}" if self.app.debug else "internal error"
+            return _tool_error(detail)
+
+        status = None
+        if isinstance(result, Reply):
+            result, status, _headers = merge(result)
 
         if isinstance(result, Response):
             body = result.encoded().decode("utf-8", "replace")
-            return {"content": [{"type": "text", "text": body}], "isError": False}
+            # An HTTPError, a validation failure, or middleware refusing the
+            # call all arrive as a response with an error status.
+            return {"content": [{"type": "text", "text": body}], "isError": result.status >= 400}
+
+        if status is not None and status >= 400:
+            return _tool_error(json.dumps(_jsonable(result), default=str))
 
         payload = _jsonable(result)
         content = {
@@ -160,7 +180,7 @@ class MCP:
 
     # ---- protocol ---------------------------------------------------------
 
-    async def dispatch(self, message: dict) -> dict | None:
+    async def dispatch(self, message: dict, parent: Any = None) -> dict | None:
         """Handle one JSON-RPC message. None means it was a notification."""
         if message.get("jsonrpc") != "2.0" or "method" not in message:
             return _err(message.get("id"), INVALID_REQUEST, "not a JSON-RPC 2.0 request")
@@ -189,7 +209,7 @@ class MCP:
             elif method == "tools/list":
                 result = {"tools": self.tool_list()}
             elif method == "tools/call":
-                result = await self.call_tool(params)
+                result = await self.call_tool(params, parent)
             elif method == "resources/list":
                 result = {"resources": self.resource_list()}
             elif method == "resources/templates/list":
@@ -209,7 +229,7 @@ class MCP:
 
         return None if notification else _ok(request_id, result)
 
-    async def handle(self, body: bytes) -> Response:
+    async def handle(self, body: bytes, request: Any = None) -> Response:
         try:
             message = json.loads(body)
         except ValueError:
@@ -236,7 +256,7 @@ class MCP:
                 content_type="application/json",
             )
 
-        reply = await self.dispatch(message)
+        reply = await self.dispatch(message, request)
         if reply is None:
             # A notification gets no body, only acknowledgement.
             return Response(b"", status=202, content_type="application/json")

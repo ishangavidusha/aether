@@ -22,8 +22,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ._bodies import BodyStream
 from ._depends import Depends
 from ._depends import bind as bind_dependencies
+from ._forms import Form
 from ._schema import (
     HAVE_PYDANTIC,
     RequestValidationError,
@@ -81,6 +83,10 @@ class RouteInfo:
     """What actually runs, which wraps `fn` when there is a body to validate."""
     params: list[ParamInfo] = field(default_factory=list)
     body: tuple[str, Any] | None = None
+    form: tuple[str, Any] | None = None
+    """(argument, model) for a pydantic model bound from a form body."""
+    stream: str | None = None
+    """The argument that receives a `BodyStream`, which makes the route stream."""
     dependencies: dict[str, Any] = field(default_factory=dict)
     response_model: Any = None
     summary: str = ""
@@ -90,6 +96,9 @@ class RouteInfo:
     """Runs before the handshake; may refuse the upgrade."""
     tool: bool = False
     """Exposed to agents over MCP. Opt-in, never the default."""
+    middleware: list[Any] = field(default_factory=list)
+    """Middleware from the routers this route was included through, outermost
+    first. Runs inside the app's own middleware."""
 
 
 #: Every `{name}` and `{*name}`, whatever it is called. Two routes conflict in
@@ -160,13 +169,56 @@ def bind_body(fn: Callable[..., Any], name: str, model: Any) -> Callable[..., An
     return handler
 
 
-def _build_target(fn: Callable[..., Any], body: Any, dependencies: dict) -> Callable[..., Any]:
+def bind_form(fn: Callable[..., Any], name: str, model: Any, marker: Form) -> Callable[..., Any]:
+    """Wrap a handler so a form body is parsed and validated into `model`.
+
+    A field the model declares as a list collects every value of a repeated
+    form field; any other field takes the first.
+    """
+    repeated = set()
+    for field_name, info in model.model_fields.items():
+        if typing.get_origin(info.annotation) is list:
+            repeated.add(info.alias or field_name)
+
+    async def handler(request, **params):
+        form = request.form(max_parts=marker.max_parts)
+        data = {key: form.getlist(key) if key in repeated else form[key] for key in form}
+        try:
+            params[name] = model.model_validate(data)
+        except ValidationError as exc:
+            raise RequestValidationError(validation_body(exc)) from None
+        return await fn(request, **params)
+
+    handler.__name__ = getattr(fn, "__name__", "handler")
+    handler.__qualname__ = getattr(fn, "__qualname__", "handler")
+    return handler
+
+
+def bind_stream(fn: Callable[..., Any], name: str) -> Callable[..., Any]:
+    async def handler(request, **params):
+        params[name] = request.stream()
+        return await fn(request, **params)
+
+    handler.__name__ = getattr(fn, "__name__", "handler")
+    handler.__qualname__ = getattr(fn, "__qualname__", "handler")
+    return handler
+
+
+def _build_target(
+    fn: Callable[..., Any], body: Any, form: Any, stream: str | None, dependencies: dict
+) -> Callable[..., Any]:
     """Layer body validation and dependency resolution around the handler.
 
     Dependencies resolve outside body validation, so a dependency that opens a
     resource still tears it down when the body turns out to be invalid.
     """
-    target = fn if body is None else bind_body(fn, *body)
+    target = fn
+    if body is not None:
+        target = bind_body(fn, *body)
+    elif form is not None:
+        target = bind_form(fn, *form)
+    elif stream is not None:
+        target = bind_stream(fn, stream)
     return target if not dependencies else bind_dependencies(target, dependencies)
 
 
@@ -243,6 +295,8 @@ def build_route(
     # Anything left is a query parameter, the body if it is a pydantic model,
     # or a dependency if its default says so.
     body: tuple[str, Any] | None = None
+    form: tuple[str, Any, Form] | None = None
+    stream: str | None = None
     dependencies: dict[str, Depends] = {}
     for name, param in accepted.items():
         if name in set(names):
@@ -253,11 +307,40 @@ def build_route(
             continue
         annotation = hints.get(name, _EMPTY)
 
+        if annotation is BodyStream:
+            if websocket:
+                raise TypeError(f"{where}: a websocket handler has no request body")
+            if stream is not None or form is not None or body is not None:
+                raise TypeError(
+                    f"{where}: handler declares more than one body; a request has one"
+                )
+            stream = name
+            continue
+
+        if isinstance(param.default, Form):
+            if not is_model(annotation):
+                raise TypeError(
+                    f"{where}: {name!r} is bound from a form, so it must be annotated "
+                    f"with a pydantic model. For the raw fields, call request.form()"
+                )
+            if websocket:
+                raise TypeError(f"{where}: a websocket handler has no form body")
+            if form is not None or body is not None or stream is not None:
+                raise TypeError(
+                    f"{where}: handler declares more than one body; a request has one"
+                )
+            form = (name, annotation, param.default)
+            continue
+
         if is_model(annotation):
             if websocket:
                 raise TypeError(
                     f"{where}: a websocket handler has no request body; "
                     f"read messages from the socket instead"
+                )
+            if form is not None or stream is not None:
+                raise TypeError(
+                    f"{where}: handler declares more than one body; a request has one"
                 )
             if body is not None:
                 raise TypeError(
@@ -310,6 +393,13 @@ def build_route(
             )
         )
 
+    if tool and (form is not None or stream is not None):
+        raise TypeError(
+            f"{where}: a route that reads a {'form' if form is not None else 'streamed body'} "
+            f"cannot be an agent tool; tool arguments arrive as JSON. Use a pydantic "
+            f"body for a tool=True route"
+        )
+
     response_model = hints.get("return")
     if not is_model(response_model):
         response_model = None
@@ -321,9 +411,11 @@ def build_route(
         method=method,
         path=path,
         fn=fn,
-        target=_build_target(fn, body, dependencies),
+        target=_build_target(fn, body, form, stream, dependencies),
         params=params,
         body=body,
+        form=None if form is None else form[:2],
+        stream=stream,
         dependencies=dependencies,
         response_model=response_model,
         summary=summary.strip().replace("\n", " "),

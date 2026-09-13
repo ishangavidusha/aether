@@ -2,8 +2,9 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc;
-use std::sync::Arc;
-use std::thread;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -39,6 +40,9 @@ struct Drainer {
     reader: UnixStream,
     /// Handed to each `Responder` so streams can watch for disconnects.
     runtime: tokio::runtime::Handle,
+    /// This loop's `WorkerContext`: the app, and the state its lifespans
+    /// yielded. Every request on the loop shares it.
+    context: Py<PyAny>,
 }
 
 impl Drainer {
@@ -125,6 +129,8 @@ impl Drainer {
                     query: item.query,
                     body: item.body,
                     headers: item.headers,
+                    context: Some(self.context.clone_ref(py)),
+                    stream: item.body_stream,
                 },
             )?;
             let responder = Py::new(
@@ -153,12 +159,15 @@ pub struct Worker {
     pub queue: Arc<WorkerQueue>,
     event_loop: Py<PyAny>,
     call_soon_threadsafe: Py<PyAny>,
+    /// Joined at shutdown, so the loop's teardown finishes before `serve`
+    /// returns rather than being cut off when the process exits.
+    thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Worker {
-    /// Eight arguments, one over the limit. Called once per worker at start,
-    /// with a different value for each, so grouping them would be a struct
-    /// that exists only to satisfy a count.
+    /// Nine arguments. Called once per worker at start, with a different value
+    /// for each, so grouping them would be a struct that exists only to
+    /// satisfy a count.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         py: Python<'_>,
@@ -169,6 +178,7 @@ impl Worker {
         limit: usize,
         debug: bool,
         tokio_handle: tokio::runtime::Handle,
+        lifecycle: Py<PyAny>,
     ) -> PyResult<Self> {
         let (write_end, read_end) = UnixStream::pair()?;
         write_end.set_nonblocking(true)?;
@@ -178,13 +188,38 @@ impl Worker {
         let worker_queue = queue.clone();
         let (tx, rx) = mpsc::channel::<PyResult<(Py<PyAny>, Py<PyAny>)>>();
 
-        thread::Builder::new()
+        let handle = thread::Builder::new()
             .name(format!("aether-py-{index}"))
             .spawn(move || {
                 Python::attach(|py| {
-                    let started = (|| -> PyResult<(Bound<'_, PyAny>, Py<PyAny>)> {
+                    let event_loop = match py
+                        .import("aether._runtime")
+                        .and_then(|runtime| runtime.call_method0("make_worker_loop"))
+                    {
+                        Ok(event_loop) => event_loop,
+                        Err(e) => {
+                            let _ = tx.send(Err(e));
+                            return;
+                        }
+                    };
+                    let lifecycle = lifecycle.bind(py);
+
+                    // The worker lifespan runs on this loop before anything is
+                    // served from it, since what it builds may be bound to it.
+                    let context = match lifecycle
+                        .call_method0("start_worker")
+                        .and_then(|coro| event_loop.call_method1("run_until_complete", (coro,)))
+                    {
+                        Ok(context) => context,
+                        Err(e) => {
+                            let _ = event_loop.call_method0("close");
+                            let _ = tx.send(Err(e));
+                            return;
+                        }
+                    };
+
+                    let started = (|| -> PyResult<(i32, Py<PyAny>)> {
                         let runtime = py.import("aether._runtime")?;
-                        let event_loop = runtime.call_method0("make_worker_loop")?;
                         let drainer = Drainer {
                             queue: worker_queue,
                             routes,
@@ -199,21 +234,41 @@ impl Worker {
                             debug,
                             reader: read_end,
                             runtime: tokio_handle,
+                            context: context.clone().unbind(),
                         };
                         let fd = drainer.reader.as_raw_fd();
                         event_loop.call_method1("add_reader", (fd, Py::new(py, drainer)?))?;
                         let csts = event_loop.getattr("call_soon_threadsafe")?.unbind();
-                        Ok((event_loop, csts))
+                        Ok((fd, csts))
                     })();
 
+                    let teardown = |event_loop: &Bound<'_, PyAny>| {
+                        let stopped = lifecycle
+                            .call_method1("stop_worker", (context.clone(),))
+                            .and_then(|coro| {
+                                event_loop.call_method1("run_until_complete", (coro,))
+                            });
+                        if let Err(e) = stopped {
+                            eprintln!("aether: worker {index} lifespan teardown raised");
+                            e.print(py);
+                        }
+                        let _ = event_loop.call_method0("close");
+                    };
+
                     match started {
-                        Ok((event_loop, csts)) => {
+                        Ok((fd, csts)) => {
                             let _ = tx.send(Ok((event_loop.clone().unbind(), csts)));
                             if let Err(e) = event_loop.call_method0("run_forever") {
                                 e.print(py);
                             }
+                            // Stop taking requests before tearing down what
+                            // they would use. Anything still queued is never
+                            // started, and its client sees the connection end.
+                            let _ = event_loop.call_method1("remove_reader", (fd,));
+                            teardown(&event_loop);
                         }
                         Err(e) => {
+                            teardown(&event_loop);
                             let _ = tx.send(Err(e));
                         }
                     }
@@ -222,15 +277,23 @@ impl Worker {
             .expect("failed to spawn python worker thread");
 
         // Detach while waiting: blocking in native code while attached stalls
-        // free-threaded CPython's stop-the-world and deadlocks startup.
-        let (event_loop, call_soon_threadsafe) = py
-            .detach(move || rx.recv())
-            .expect("worker thread died before reporting its event loop")?;
+        // free-threaded CPython's stop-the-world and deadlocks startup. The
+        // wait includes the worker lifespan, which may take a while.
+        let reported = py.detach(move || rx.recv());
+        let (event_loop, call_soon_threadsafe) = match reported {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => {
+                let _ = py.detach(move || handle.join());
+                return Err(e);
+            }
+            Err(_) => panic!("worker thread died before reporting its event loop"),
+        };
 
         Ok(Self {
             queue,
             event_loop,
             call_soon_threadsafe,
+            thread: Mutex::new(Some(handle)),
         })
     }
 
@@ -238,5 +301,26 @@ impl Worker {
         if let Ok(stop) = self.event_loop.getattr(py, "stop") {
             let _ = self.call_soon_threadsafe.call1(py, (stop,));
         }
+    }
+
+    /// Wait for the worker thread, and so its lifespan teardown, to finish.
+    ///
+    /// Bounded, because teardown is application code and may hang; a hang
+    /// must not turn Ctrl-C into a process that never exits. Detached while
+    /// waiting, since the worker thread needs the interpreter to finish.
+    pub fn join(&self, py: Python<'_>, deadline: Instant) -> bool {
+        let Some(handle) = self.thread.lock().ok().and_then(|mut slot| slot.take()) else {
+            return true;
+        };
+        py.detach(|| {
+            while !handle.is_finished() {
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            let _ = handle.join();
+            true
+        })
     }
 }

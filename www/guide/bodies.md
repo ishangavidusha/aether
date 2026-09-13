@@ -57,6 +57,7 @@ dispatch and serialization, not validation.
 ## Raw bodies
 
 `request.body` is the raw bytes, for a handler that wants to parse them itself.
+For HTML forms and file uploads, see [Forms and uploads](forms.md).
 
 ```python
 @app.post("/webhook")
@@ -80,3 +81,8 @@ handler ever sees it. Raise it per server:
 ```python
 app.run(max_body=64 * 1024 * 1024)
 ```
+
+For uploads larger than it is sensible to hold in memory, a route can take its
+body as a [`BodyStream`](forms.md#streaming-a-body) instead: the limit still
+applies, counted as the chunks arrive, but nothing is held beyond about a
+megabyte at a time.

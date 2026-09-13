@@ -7,6 +7,7 @@ runs.
 from aether import Depends
 
 async def get_db(request):
+    pool = request.state.pool           # this worker loop's pool
     db = await pool.acquire()
     try:
         yield db
@@ -20,6 +21,10 @@ async def list_users(_: Request, db = Depends(get_db)):
 
 A dependency is any callable. It may take the request or take nothing, be sync
 or async, be a plain function or a generator.
+
+The pool comes from `request.state` rather than a module-level variable because
+each worker loop needs its own: an asyncio pool cannot be shared between loops.
+[Lifespan](lifespan.md) is where it gets created.
 
 ## Why this exists
 

@@ -1,6 +1,8 @@
 use hyper::header::{HeaderMap, HeaderName, HeaderValue};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+
+use crate::form::{self, FormError, Part};
 
 /// Immutable view of an incoming HTTP request, handed to the Python handler.
 /// `frozen` means no Python-side mutation, so no locking is needed even on
@@ -15,6 +17,11 @@ pub struct Request {
     /// never look at a header, and converting every one into Python strings on
     /// every request would be paid by all of them.
     pub headers: HeaderMap,
+    /// The worker loop's `WorkerContext`, shared by every request on it.
+    /// None for a request built by hand with no context passed.
+    pub context: Option<Py<PyAny>>,
+    /// The incremental body, for a route that declared a `BodyStream`.
+    pub stream: Option<std::sync::Arc<crate::body::BodyShared>>,
 }
 
 #[pymethods]
@@ -25,13 +32,14 @@ impl Request {
     /// but the handler it calls still expects a request. The test client uses
     /// it too.
     #[new]
-    #[pyo3(signature = (method = "GET".to_string(), path = "/".to_string(), query = None, body = None, headers = None))]
+    #[pyo3(signature = (method = "GET".to_string(), path = "/".to_string(), query = None, body = None, headers = None, context = None))]
     fn py_new(
         method: String,
         path: String,
         query: Option<String>,
         body: Option<Vec<u8>>,
         headers: Option<Vec<(String, String)>>,
+        context: Option<Py<PyAny>>,
     ) -> Self {
         let mut map = HeaderMap::new();
         for (name, value) in headers.unwrap_or_default() {
@@ -48,7 +56,34 @@ impl Request {
             query,
             body: body.unwrap_or_default(),
             headers: map,
+            context,
+            stream: None,
         }
+    }
+
+    /// The app serving this request.
+    #[getter]
+    fn app<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        self.context
+            .as_ref()
+            .map(|context| context.bind(py).getattr("app"))
+            .transpose()
+    }
+
+    /// Values yielded by the app's `lifespan` and `worker_lifespan`, read-only.
+    #[getter]
+    fn state<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        self.context
+            .as_ref()
+            .map(|context| context.bind(py).getattr("state"))
+            .transpose()
+    }
+
+    /// The worker context itself, so a request synthesized from this one —
+    /// an MCP tool call — sees the same app and state.
+    #[getter(_context)]
+    fn context_handle(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.context.as_ref().map(|context| context.clone_ref(py))
     }
 
     /// The HTTP method, uppercase.
@@ -127,6 +162,102 @@ impl Request {
             }
         }
         Ok(dict)
+    }
+
+    /// Parse the body as a form, `application/x-www-form-urlencoded` or
+    /// `multipart/form-data`, into a `FormData`.
+    ///
+    /// Parsed each time it is called, and only when it is called. Raises
+    /// `HTTPError(415)` for a body that is not a form, `HTTPError(400)` for a
+    /// malformed one and `HTTPError(413)` past `max_parts`, which bounds how
+    /// many Python objects a single request can make the worker build.
+    #[pyo3(signature = (max_parts = 1000))]
+    fn form<'py>(&self, py: Python<'py>, max_parts: usize) -> PyResult<Bound<'py, PyAny>> {
+        let content_type = self
+            .headers
+            .get(hyper::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let body = &self.body;
+        // Pure Rust over bytes already owned here, so other threads may run.
+        let parsed = py.detach(|| form::parse(content_type.as_deref(), body, max_parts));
+
+        let error = |status: u16, detail: String| -> PyErr {
+            match py
+                .import("aether._errors")
+                .and_then(|m| m.getattr("HTTPError"))
+                .and_then(|cls| cls.call1((status, detail)))
+            {
+                Ok(exc) => PyErr::from_value(exc),
+                Err(e) => e,
+            }
+        };
+
+        let parts = match parsed {
+            Ok(parts) => parts,
+            Err(FormError::Unsupported) => {
+                return Err(error(
+                    415,
+                    "expected a form body: application/x-www-form-urlencoded or \
+                     multipart/form-data"
+                        .into(),
+                ))
+            }
+            Err(FormError::Malformed(reason)) => {
+                return Err(error(400, format!("malformed form body: {reason}")))
+            }
+            Err(FormError::TooManyParts(limit)) => {
+                return Err(error(413, format!("form has more than {limit} parts")))
+            }
+        };
+
+        let list = PyList::empty(py);
+        for part in parts {
+            let item = match part {
+                Part::Field { name, value } => PyTuple::new(
+                    py,
+                    [
+                        name.into_pyobject(py)?.into_any(),
+                        value.into_pyobject(py)?.into_any(),
+                    ],
+                )?,
+                Part::File {
+                    name,
+                    filename,
+                    content_type,
+                    data,
+                } => PyTuple::new(
+                    py,
+                    [
+                        name.into_pyobject(py)?.into_any(),
+                        filename.into_pyobject(py)?.into_any(),
+                        content_type.into_pyobject(py)?.into_any(),
+                        PyBytes::new(py, &data).into_any(),
+                    ],
+                )?,
+            };
+            list.append(item)?;
+        }
+        py.import("aether._forms")?
+            .getattr("FormData")?
+            .call_method1("from_parts", (list,))
+    }
+
+    /// The body as an async iterator of `bytes` chunks: a `BodyStream`.
+    ///
+    /// On a route that declares a `BodyStream` argument the chunks arrive as
+    /// the client sends them, and nothing is read until the first one is
+    /// asked for. On any other route the body was already collected, and this
+    /// yields it as a single chunk, so code reading a stream works on both.
+    fn stream<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let reader = match &self.stream {
+            Some(shared) => Some(Py::new(py, crate::body::BodyReader::new(shared.clone()))?),
+            None => None,
+        };
+        let buffered = PyBytes::new(py, &self.body);
+        py.import("aether._bodies")?
+            .getattr("BodyStream")?
+            .call1((reader, buffered))
     }
 
     fn __repr__(&self) -> String {

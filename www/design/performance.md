@@ -261,6 +261,9 @@ These are open, not assumed. An unmeasured claim is not a result:
 - **Scaling past 8 loops** on a large homogeneous Linux machine. The cap of 8
   is a guard against an absurd probe result, not a measured ceiling; this
   machine has four performance cores and cannot answer the question.
+- **Form parsing and streaming uploads.** Both are verified for correctness and
+  for memory — a 200 MB upload to a slow reader stays within a few megabytes —
+  but neither has a throughput number.
 - **The WebSocket ceiling.** Above 100 connections the Python load generator
   saturates before the server does; finding the server's limit needs a faster
   client.

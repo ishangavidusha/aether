@@ -45,6 +45,28 @@ async def write_note(_: Request, body: NoteIn) -> Note:
 A body field that collides with a path or query parameter is an error at import
 time, not a silent overwrite at call time.
 
+## Middleware, errors and auth
+
+A tool call arrives as a `POST` to `/mcp`, so the app's middleware runs around
+it the way it runs around any request: an app-wide auth check covers agents
+too.
+
+The route's own [router](guide/routers.md) middleware runs around the tool call
+as well, with the headers the agent sent. An admin router that refuses a request
+without credentials refuses the tool call without them too. App middleware is
+not run a second time.
+
+[Exception handlers](guide/errors.md#exception-handlers) apply. A tool that
+answers with an error status — an `HTTPError`, a validation failure, middleware
+refusing the call — comes back to the agent with `isError: true` and the body
+as its text. A tool that raises anything unhandled comes back as
+`internal error`, and the traceback goes to the log: an agent is a client, and
+exception text is not returned to clients. `App(debug=True)` includes it.
+
+Routes that read a [form or a streamed body](guide/forms.md) cannot be tools:
+tool arguments arrive as JSON, and marking one `tool=True` raises at
+registration.
+
 ## Topics as resources
 
 Topics show up as readable resources at `topic://<name>`. A durable one returns

@@ -101,6 +101,24 @@ def _operation(route: RouteInfo, components: dict[str, Any]) -> dict[str, Any]:
             },
         }
 
+    if route.form is not None:
+        from ._forms import has_files
+
+        model = route.form[1]
+        media = "multipart/form-data" if has_files(model) else "application/x-www-form-urlencoded"
+        op["requestBody"] = {
+            "required": True,
+            "content": {media: {"schema": _register_model(model, components)}},
+        }
+
+    if route.stream is not None:
+        op["requestBody"] = {
+            "required": True,
+            "content": {
+                "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
+            },
+        }
+
     ok: dict[str, Any] = {"description": "Successful Response"}
     if route.response_model is not None:
         ok["content"] = {
@@ -110,7 +128,7 @@ def _operation(route: RouteInfo, components: dict[str, Any]) -> dict[str, Any]:
 
     # Anything with a parameter or a body can fail validation, and the shape is
     # the same in both cases.
-    if route.params or route.body is not None:
+    if route.params or route.body is not None or route.form is not None:
         op["responses"]["422"] = {
             "description": "Validation Error",
             "content": {

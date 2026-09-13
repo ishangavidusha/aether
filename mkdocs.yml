@@ -88,15 +88,19 @@ nav:
   - Install: install.md
   - Guide:
       - guide/routing.md
+      - guide/routers.md
       - guide/parameters.md
       - guide/bodies.md
+      - guide/forms.md
       - guide/responses.md
       - guide/requests.md
       - guide/middleware.md
       - guide/dependencies.md
+      - guide/lifespan.md
       - guide/sessions.md
       - guide/logging.md
       - guide/errors.md
+      - guide/cors.md
       - guide/testing.md
   - Streams:
       - streams/topics.md

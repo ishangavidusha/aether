@@ -15,10 +15,11 @@ async def hello(_: Request):
 app.run(port=8000)
 ```
 
-**Status: all six milestones complete.** Routing, typed parameters, pydantic
-bodies, backpressure, OpenAPI 3.1, in-process topics, Server-Sent Events,
-WebSocket, durable topics over Redis, an MCP endpoint, middleware,
-dependencies, sessions, logging and a test client all work.
+**Status: working, not API-stable.** Routing and routers, typed parameters,
+pydantic bodies, forms and file uploads, streaming request bodies, backpressure,
+CORS, OpenAPI 3.1, in-process topics, Server-Sent Events, WebSocket, durable
+topics over Redis, an MCP endpoint, middleware, exception handlers,
+dependencies, lifespans, sessions, logging and a test client all work.
 
 This is a personal project, not a supported product. Every feature is covered
 by the test suite on both CPython builds, but nothing is API-stable and there
@@ -50,8 +51,12 @@ The API reference is generated from the docstrings and needs the built site.
 typed by the handler's annotations and coerced in Rust — `str`, `int`, `float`,
 `bool`, `uuid.UUID`, `datetime.date`, `datetime.datetime`, and `list[T]`. A
 request that cannot succeed is answered before a Python worker is woken.
-Pydantic models bind request and response bodies. Middleware, dependency
-injection with teardown, and signed cookie sessions.
+Pydantic models bind request and response bodies, and form fields with
+`Form()`; multipart uploads are parsed in Rust, and a `BodyStream` reads a body
+larger than memory with backpressure. Routers with prefixes and
+their own middleware, exception handlers, dependency injection with teardown,
+startup and shutdown hooks per process and per worker loop, and signed cookie
+sessions.
 
 **Streams.** Named topics with fan-out and four backpressure policies.
 Subscribers on every worker loop in the process receive every message, which is
@@ -143,6 +148,9 @@ MIT. See [LICENSE](LICENSE).
 - Middleware does not wrap socket handlers, only their authorizer.
 - MCP is POST/JSON only: no streaming responses, no server-to-client channel,
   no resource subscriptions.
-- SSE and WebSocket throughput have never been measured.
+- Multipart forms are held in memory; streaming multipart parsing is not
+  available, only streaming the raw body.
+- The WebSocket throughput ceiling is unmeasured: a Python load generator
+  saturates first.
 - The worker cap of 8 is a guard against an absurd probe result, not a measured
   ceiling; it has not been tested on a large homogeneous machine.

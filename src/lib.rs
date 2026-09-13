@@ -8,6 +8,9 @@
 //! Milestone-1 spike. The goal is to measure the Rust<->Python boundary, not to
 //! be feature complete.
 
+mod body;
+mod cors;
+mod form;
 mod queue;
 mod request;
 mod responder;

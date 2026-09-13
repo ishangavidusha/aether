@@ -61,8 +61,13 @@ def _link(middleware: Any, nxt: Any):
     return call
 
 
-def wrap(handler: Any, middlewares: list[Any]) -> Any:
-    """Return a handler that runs `middlewares` around `handler`."""
+def wrap(handler: Any, middlewares: list[Any], around: Any = None) -> Any:
+    """Return a handler that runs `middlewares` around `handler`.
+
+    `around`, when given, wraps every link of the chain. Exception mapping uses
+    it, so an exception raised by one middleware reaches the next one out as a
+    reply rather than as an exception.
+    """
 
     async def dispatch(request, **params):
         async def endpoint(req):
@@ -72,6 +77,8 @@ def wrap(handler: Any, middlewares: list[Any]) -> Any:
         # Reversed so the first-registered middleware ends up outermost.
         for middleware in reversed(middlewares):
             call = _link(middleware, call)
+            if around is not None:
+                call = around(call)
         return await call(request)
 
     dispatch.__name__ = getattr(handler, "__name__", "handler")

@@ -59,24 +59,41 @@ class TestClient:
         self._options = server_options
         self._server: Any = None
         self._thread: threading.Thread | None = None
+        self._failure: BaseException | None = None
         self._client: httpx.Client | None = None
 
     # ---- lifecycle --------------------------------------------------------
+
+    def _serve(self) -> None:
+        try:
+            self._server.serve()
+        except BaseException as exc:  # noqa: BLE001 - reported by start(), not lost
+            self._failure = exc
 
     def start(self) -> "TestClient":
         self._server = self.app.build_server(
             self.host, self.port, **self._options
         )
-        self._thread = threading.Thread(target=self._server.serve, daemon=True)
+        self._failure = None
+        self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
 
-        deadline = threading.Event()
-        for _ in range(200):
+        # Waits out a slow lifespan too, which runs before the port opens. A
+        # server that fails to start raises its own exception here, rather than
+        # the client reporting a refused connection with no reason attached.
+        pause = threading.Event()
+        for _ in range(600):
+            if not self._thread.is_alive():
+                failure, self._failure = self._failure, None
+                self._server = None
+                if failure is not None:
+                    raise failure
+                raise RuntimeError(f"server on {self.base_url} stopped before it started")
             try:
                 with socket.create_connection((self.host, self.port), timeout=0.2):
                     break
             except OSError:
-                deadline.wait(0.05)
+                pause.wait(0.05)
         else:
             raise RuntimeError(f"server did not start on {self.base_url}")
 
@@ -126,11 +143,17 @@ class TestClient:
     def put(self, path: str, **kwargs: Any) -> httpx.Response:
         return self.http.put(path, **kwargs)
 
+    def patch(self, path: str, **kwargs: Any) -> httpx.Response:
+        return self.http.patch(path, **kwargs)
+
     def delete(self, path: str, **kwargs: Any) -> httpx.Response:
         return self.http.delete(path, **kwargs)
 
     def head(self, path: str, **kwargs: Any) -> httpx.Response:
         return self.http.head(path, **kwargs)
+
+    def options(self, path: str, **kwargs: Any) -> httpx.Response:
+        return self.http.options(path, **kwargs)
 
     # ---- other transports -------------------------------------------------
 

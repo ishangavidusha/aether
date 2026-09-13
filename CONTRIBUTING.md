@@ -30,7 +30,7 @@ because this is a Python extension module rather than a binary.
 ## Tests
 
 ```bash
-make verify        # nineteen suites, free-threaded
+make verify        # twenty-three suites, free-threaded
 make verify-gil    # the same suites on the GIL build
 ```
 
@@ -134,6 +134,12 @@ explains each in context; the short form:
 7. **Anything Rust validates, Rust canonicalises**, so Python's constructors
    cannot fail on input Rust already accepted.
 8. **Never return exception detail to a client.** Tracebacks go to the log.
+   An agent calling a tool over MCP is a client.
+9. **A route is guarded the same way however it is reached.** A tool call runs
+   its routers' middleware and the exception handlers, with the caller's
+   headers. A new way to invoke a handler must not bypass them.
+10. **Nothing loop-bound crosses worker loops.** Connection pools and async
+   clients belong to one loop; create them in `worker_lifespan`.
 
 ## Documentation
 

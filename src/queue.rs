@@ -40,6 +40,8 @@ pub struct Pending {
     /// Run this route's authorizer rather than its handler, and answer with
     /// its verdict. Used to decide an upgrade before the handshake.
     pub gate: bool,
+    /// Set for a route that streams its body; `body` is then empty.
+    pub body_stream: Option<std::sync::Arc<crate::body::BodyShared>>,
 }
 
 pub struct WorkerQueue {

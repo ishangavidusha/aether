@@ -21,11 +21,12 @@ python/aether/  App, routing, pydantic, OpenAPI, topics, SSE, sockets, runtime
 ## The request path
 
 1. A tokio thread accepts the connection and hyper parses the request.
-2. The router matches it against a radix tree built per HTTP method, and
-   coerces path and query parameters into owned Rust values. A request that
-   cannot succeed — bad path parameter, missing required query parameter, wrong
+2. If the app has a CORS policy, a preflight is answered here. The router
+   matches the request against a radix tree built per HTTP method, and coerces
+   path and query parameters into owned Rust values. A request that cannot
+   succeed — bad path parameter, missing required query parameter, wrong
    method, body over the limit — is answered here, and no Python worker is ever
-   woken.
+   woken. The body is collected up to `max_body`, unless the route streams it.
 3. The request becomes a plain Rust struct and is pushed onto the bounded
    queue of the least-loaded worker, counting queued plus in-flight requests.
    A loop held by a handler that computes cannot drain, so its count stays
@@ -41,6 +42,9 @@ python/aether/  App, routing, pydantic, OpenAPI, topics, SSE, sockets, runtime
 
 Two properties carry the design: Python is only ever touched from the worker's
 own thread, and a burst of requests collapses into one wakeup.
+
+On the way back out, CORS headers are added in Rust to every response, including
+the ones the server produced itself in step 2.
 
 ## Invariants
 
@@ -98,10 +102,33 @@ The pump races the next message against that guard, so a disconnected client is
 noticed without polling — including on a stream that is sitting idle on a quiet
 topic, which has nothing to write and therefore nothing that would fail.
 
+### Streaming request bodies
+
+A route that takes a `BodyStream` is dispatched before its body is read. The
+body is pumped from hyper into a queue by the connection's own request future,
+so the pump cannot outlive the request: it starts only when the handler first
+asks for a chunk, stops reading the socket while more than about a megabyte is
+waiting, and is dropped when the response is sent. Chunks reach the handler
+through the worker queue's wakeup path, the same one sockets use, so the tokio
+thread never touches the interpreter.
+
+The request timeout measures from the body's last progress. While the pump is
+waiting on the client, only the pump's own idle timeout applies, so a client's
+stall is a `408` and never races into a `504`.
+
+## Startup and shutdown
+
+Each worker thread runs `worker_lifespan` on its own loop before registering
+its drain callback, and again after its loop stops, having first removed the
+callback so nothing new starts during teardown. Workers start one at a time; if
+one fails, the ones already running are stopped and joined before the error
+surfaces. At shutdown the server waits for every worker thread, bounded by
+`shutdown_grace`, and only then runs the process `lifespan`'s teardown.
+
 ## Testing
 
-Eighteen standalone scripts under `tests/`, each exiting non-zero on failure,
-run against a real server on a real socket.
+Twenty-three standalone scripts under `tests/`, each exiting non-zero on
+failure, run against a real server on a real socket.
 
 ```bash
 make verify        # free-threaded

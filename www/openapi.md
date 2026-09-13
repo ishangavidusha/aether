@@ -29,6 +29,10 @@ change accidentally.
 - Path and query parameters, with their types, and whether they are required
 - Request bodies from pydantic models, with nested models hoisted into
   `components/schemas`
+- Form bodies bound with `Form()`, as `multipart/form-data` when the model has
+  an `UploadFile` field and `application/x-www-form-urlencoded` otherwise
+- Streaming bodies, as `application/octet-stream`
+- Routes from every included [router](guide/routers.md), at their full paths
 - Response models, taken from the handler's return annotation
 - The first line of the handler's docstring as the summary, the rest as the
   description

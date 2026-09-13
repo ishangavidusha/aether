@@ -1,6 +1,7 @@
 """Dependency injection.
 
     async def get_db(request):
+        pool = request.state.pool      # one per worker loop; see _lifecycle
         db = await pool.acquire()
         try:
             yield db

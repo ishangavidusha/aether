@@ -11,8 +11,13 @@ def test_users():
 ```
 
 `TestClient` starts the real server on a free port, on a background thread, and
-stops it when the block ends. It exposes `get`, `post`, `put`, `delete`, `head`
-and `request`, each returning an `httpx.Response`.
+stops it when the block ends. It exposes `get`, `post`, `put`, `patch`,
+`delete`, `head`, `options` and `request`, each returning an `httpx.Response`.
+
+The app's [lifespans](lifespan.md) run exactly as they do under `app.run`:
+entering the block runs startup, leaving it runs shutdown. If startup raises,
+entering the block raises that same exception, rather than the client reporting
+a refused connection.
 
 ## Why a real server
 
@@ -60,3 +65,15 @@ TestClient(app, max_concurrency=1, request_timeout=1.0)
 
 Which is how the backpressure and timeout paths are tested: set the limit to
 something you can reach from one test.
+
+## Forms, uploads and CORS
+
+httpx builds form bodies itself, so a form handler is tested the way a browser
+would call it:
+
+```python
+client.post("/signup", data={"email": "a@b.c"}, files={"avatar": ("me.png", png, "image/png")})
+client.put("/uploads/big", content=chunk_generator())     # streamed, never held whole
+client.options("/items", headers={"origin": "https://app.example.com",
+                                  "access-control-request-method": "POST"})
+```

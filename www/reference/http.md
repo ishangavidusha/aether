@@ -7,3 +7,13 @@
 ::: aether.Response
 
 ::: aether.Reply
+
+::: aether.FormData
+
+::: aether.UploadFile
+
+::: aether.Form
+
+::: aether.BodyStream
+
+::: aether.CORS

@@ -35,6 +35,13 @@ class RequestValidationError(Exception):
         super().__init__("request body failed validation")
         self.body = body
 
+    @property
+    def errors(self) -> list:
+        """The individual failures, for an exception handler that reshapes them."""
+        import json
+
+        return json.loads(self.body)["detail"]
+
 
 def is_model(annotation: Any) -> bool:
     return HAVE_PYDANTIC and isinstance(annotation, type) and issubclass(annotation, BaseModel)

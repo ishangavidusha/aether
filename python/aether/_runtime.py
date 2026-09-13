@@ -10,6 +10,7 @@ import asyncio
 import datetime
 import uuid
 
+from ._errors import HTTPError, http_error_body
 from ._logging import logger
 from ._middleware import Reply, merge
 from ._response import Response
@@ -201,6 +202,14 @@ async def _respond(handler, request, responder, params, debug):
         result = await (handler(request) if params is None else handler(request, **params))
     except RequestValidationError as exc:
         responder.send(422, "application/json", exc.body)
+        return
+    except HTTPError as exc:
+        # The default handling, for a route with no middleware and no
+        # registered handlers, which is wrapped in nothing. Anything registered
+        # was already applied by the time an exception reaches here.
+        responder.send(
+            exc.status, "application/json", http_error_body(exc), list(exc.headers.items()) or None
+        )
         return
     except Exception as exc:  # noqa: BLE001 - a handler crash must still answer
         # The detail goes to the server's log. The client gets a status and

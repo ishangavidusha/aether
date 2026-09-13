@@ -1,11 +1,17 @@
+import inspect
 import json
 import sys
 from typing import Any
 
 from . import _openapi
-from ._middleware import make_gate
+from ._cors import CORS
+from ._errors import DEFAULT_HANDLERS
+from ._errors import guard as guard_exceptions
+from ._lifecycle import Lifecycle, ServerHandle, State, check_hook
+from ._middleware import as_reply, make_gate
 from ._middleware import wrap as wrap_middleware
 from ._response import Response
+from ._routers import Router, check_prefix
 from ._routing import RouteInfo, build_route, route_shape
 from ._streams import DROP_OLDEST, Topic
 from ._workers import default_workers, gil_enabled
@@ -48,6 +54,9 @@ class App:
         debug: bool = False,
         access_log: bool = False,
         redis_url: str | None = None,
+        lifespan: Any = None,
+        worker_lifespan: Any = None,
+        cors: CORS | None = None,
     ) -> None:
         """`openapi_url` and `docs_url` can each be set to None to disable them.
 
@@ -64,9 +73,18 @@ class App:
         `mcp_url` is where agents reach the service over the Model Context
         Protocol. It exposes only routes marked `tool=True`, plus topics as
         readable resources. Set it to None to turn the endpoint off entirely.
+
+        `lifespan` runs once around the server's life and `worker_lifespan` runs
+        on every worker loop; what they yield is `request.state`. Two, because
+        a connection pool belongs to the loop that made it and a server has
+        several loops. See the lifespan guide.
+
+        `cors` lets pages on other origins call the app from a browser. Applied
+        in Rust, to every response including the ones no handler produced.
         """
         self.routes: list[RouteInfo] = []
         self._middleware: list[Any] = []
+        self._exception_handlers: dict[type, Any] = {}
         if access_log:
             from ._logging import access_middleware
 
@@ -82,6 +100,13 @@ class App:
         self.debug = debug
         self.redis_url = redis_url
         self._backend: Any = None
+        if cors is not None and not isinstance(cors, CORS):
+            raise TypeError(f"cors must be a CORS(...), got {type(cors).__name__}")
+        self.cors = cors
+        self.lifespan = check_hook(lifespan, "lifespan")
+        self.worker_lifespan = check_hook(worker_lifespan, "worker_lifespan")
+        #: What `lifespan` yielded, while a server is running. Empty otherwise.
+        self.state = State()
 
     def route(self, method: str, path: str, tool: bool = False):
         """Register a route.
@@ -138,8 +163,26 @@ class App:
     def put(self, path: str, tool: bool = False):
         return self.route("PUT", path, tool=tool)
 
+    def patch(self, path: str, tool: bool = False):
+        return self.route("PATCH", path, tool=tool)
+
     def delete(self, path: str, tool: bool = False):
         return self.route("DELETE", path, tool=tool)
+
+    def include(self, router: Router, prefix: str = "") -> None:
+        """Mount a router's routes, under `prefix` if given.
+
+            app.include(users.router, prefix="/api/v1")
+
+        Every route is validated against its full path here, and checked
+        against the routes already registered, so a conflict between two
+        modules fails at this call rather than at startup. Include after the
+        router is fully declared: it cannot change afterwards.
+        """
+        if not isinstance(router, Router):
+            raise TypeError(f"include() needs a Router, got {type(router).__name__}")
+        for route in router._flatten(check_prefix(prefix), []):
+            self._add(route)
 
     def middleware(self, fn):
         """Register middleware, which runs around every HTTP handler.
@@ -156,6 +199,88 @@ class App:
         """
         self._middleware.append(fn)
         return fn
+
+    def exception_handler(self, exc_class: type):
+        """Register how an exception becomes a response.
+
+            @app.exception_handler(LookupError)
+            async def missing(request, exc):
+                return Reply({"error": "not found"}, status=404)
+
+        Applies to the class and its subclasses; the most specific registered
+        class wins. Raised by a handler, a dependency, body validation, an
+        authorizer or middleware, the exception is mapped before middleware
+        sees the result, so the access log records the real status.
+
+        Registering `HTTPError` or `RequestValidationError` replaces the
+        built-in response for it. See `aether.HTTPError`.
+        """
+        if not (isinstance(exc_class, type) and issubclass(exc_class, Exception)):
+            raise TypeError(
+                f"exception_handler() needs an Exception subclass, got {exc_class!r}"
+            )
+
+        def decorator(fn):
+            if not inspect.iscoroutinefunction(fn):
+                raise TypeError(
+                    f"exception handler {getattr(fn, '__qualname__', fn)} for "
+                    f"{exc_class.__name__} must be `async def`"
+                )
+            existing = self._exception_handlers.get(exc_class)
+            if existing is not None:
+                raise ValueError(
+                    f"{exc_class.__name__} already has a handler, "
+                    f"{getattr(existing, '__qualname__', existing)}"
+                )
+            self._exception_handlers[exc_class] = fn
+            return fn
+
+        return decorator
+
+    def _handlers(self) -> dict[type, Any]:
+        return {**DEFAULT_HANDLERS, **self._exception_handlers}
+
+    def _layer(self, target: Any, chain: list[Any], handlers: dict[type, Any]) -> Any:
+        """Exception mapping around the handler and around every middleware link,
+        so each middleware sees a reply from everything inside it — including an
+        `HTTPError` raised by an inner router's middleware — and never an
+        exception that already has a handler."""
+        target = guard_exceptions(target, handlers)
+        if not chain:
+            return target
+
+        def around(call):
+            guarded = guard_exceptions(call, handlers)
+
+            async def link(request):
+                return as_reply(await guarded(request))
+
+            return link
+
+        return wrap_middleware(target, chain, around)
+
+    def _compose(self, target: Any, extra_middleware: list[Any]) -> Any:
+        """What actually runs for a route served over HTTP.
+
+        A route with no middleware and no registered exception handlers is left
+        exactly as it was, so the common path pays nothing; the runtime applies
+        the two built-in defaults itself.
+        """
+        chain = self._middleware + extra_middleware
+        if not chain and not self._exception_handlers:
+            return target
+        return self._layer(target, chain, self._handlers())
+
+    def _tool_target(self, route: RouteInfo) -> Any:
+        """What runs when a route is called as an MCP tool.
+
+        The route's router middleware and the exception handlers, but not the
+        app's middleware: that already ran, around the `/mcp` request that
+        carried the call, and running it again would log and authorise twice.
+        Router middleware is the part that must not be skipped — it is where an
+        admin router's auth check lives.
+        """
+        return self._layer(route.target, list(route.middleware), self._handlers())
 
     def websocket(self, path: str, authorize: Any = None):
         """Register a WebSocket endpoint.
@@ -246,7 +371,7 @@ class App:
         """
         from . import _capabilities
 
-        return _capabilities.build(self.routes)
+        return _capabilities.build(self.routes, self._tool_target)
 
     def openapi(self) -> dict[str, Any]:
         """The OpenAPI 3.1 document for the routes registered so far.
@@ -273,7 +398,7 @@ class App:
         @self.post(self.mcp_url)
         async def mcp_endpoint(request):
             """Model Context Protocol endpoint."""
-            return await server.handle(request.body)
+            return await server.handle(request.body, request)
 
     def _register_docs(self) -> None:
         """Add the OpenAPI and docs routes, unless the user turned them off."""
@@ -358,7 +483,8 @@ class App:
         """Prepare a server without starting it.
 
         `run` uses this; so does the test client, which needs to start the
-        server on one thread and stop it from another.
+        server on one thread and stop it from another. The lifespans run inside
+        `serve`, not here.
         """
         from ._core import Server
 
@@ -379,26 +505,21 @@ class App:
             (
                 r.method,
                 r.path,
-                # Sockets are left alone, and a route pays nothing when no
-                # middleware is registered.
-                r.target
-                if r.websocket or not self._middleware
-                else wrap_middleware(r.target, self._middleware),
+                # Sockets are left alone: their handshake is already done, so
+                # there is nothing for middleware or a mapped status to act on.
+                r.target if r.websocket else self._compose(r.target, r.middleware),
                 [p.as_spec() for p in r.params],
                 r.websocket,
-                # Middleware wraps the authorizer too, so an app-wide auth rule
-                # covers sockets even though it cannot wrap the handler itself.
-                None
-                if r.authorizer is None
-                else (
-                    r.authorizer
-                    if not self._middleware
-                    else wrap_middleware(r.authorizer, self._middleware)
-                ),
+                # The authorizer gets both, so an app-wide auth rule and an
+                # `HTTPError(401)` cover sockets even though neither can wrap
+                # the socket handler itself.
+                None if r.authorizer is None else self._compose(r.authorizer, r.middleware),
+                r.stream is not None,
             )
             for r in self.routes
         ]
-        return Server(
+        lifecycle = Lifecycle(self)
+        core = Server(
             host,
             port,
             workers,
@@ -411,4 +532,7 @@ class App:
             max_connections,
             not announce,
             specs,
+            lifecycle,
+            None if self.cors is None else self.cors.as_spec(),
         )
+        return ServerHandle(core, lifecycle)

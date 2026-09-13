@@ -68,3 +68,10 @@ With `require_key` registered above, that socket is now refused with `401`
 before the upgrade, by the same rule that guards the REST routes. A socket
 route with no authorizer at all is not wrapped by anything. See
 [WebSocket](../streams/websockets.md#refusing-a-connection).
+
+## Router middleware
+
+A [router](routers.md) can register middleware that runs only for its own
+routes, inside the app's. An exception with a registered
+[exception handler](errors.md#exception-handlers) is mapped at every layer, so
+middleware always receives a reply from what it wraps.

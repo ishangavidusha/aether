@@ -23,6 +23,8 @@ use tokio::sync::{oneshot, Notify};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 
+use crate::body::BodyShared;
+use crate::cors::{Cors, CorsTuple};
 use crate::queue::Pending;
 use crate::responder::{Body, Reply};
 use crate::router::{RouteError, RouteTuple, Router, SpecTuple};
@@ -39,6 +41,8 @@ struct State {
     max_body: usize,
     /// Largest single WebSocket message accepted, in bytes.
     max_message: usize,
+    /// None when the app configured no CORS, which costs one branch.
+    cors: Option<Arc<Cors>>,
 }
 
 #[pyclass(name = "Server", module = "aether._core")]
@@ -59,9 +63,12 @@ pub struct Server {
     max_connections: usize,
     quiet: bool,
     routes: Vec<Route>,
+    /// `aether._lifecycle.Lifecycle`: runs the worker lifespan on each loop.
+    lifecycle: Py<PyAny>,
+    cors: Option<CorsTuple>,
 }
 
-/// (method, path, handler, params, is_websocket, authorizer)
+/// (method, path, handler, params, is_websocket, authorizer, streams_body)
 type Route = (
     String,
     String,
@@ -69,12 +76,13 @@ type Route = (
     Vec<SpecTuple>,
     bool,
     Option<Py<PyAny>>,
+    bool,
 );
 
 #[pymethods]
 impl Server {
     #[new]
-    /// Eleven arguments, which clippy dislikes. This is the Python
+    /// Fourteen arguments, which clippy dislikes. This is the Python
     /// constructor: the signature *is* the API, and collapsing it into a
     /// config object would move the same fields behind a dict that Python has
     /// to build on every server start.
@@ -92,6 +100,8 @@ impl Server {
         max_connections: usize,
         quiet: bool,
         routes: Vec<Route>,
+        lifecycle: Py<PyAny>,
+        cors: Option<CorsTuple>,
     ) -> Self {
         Self {
             host,
@@ -110,6 +120,8 @@ impl Server {
             max_connections: max_connections.max(1),
             quiet,
             routes,
+            lifecycle,
+            cors,
         }
     }
 
@@ -125,7 +137,7 @@ impl Server {
         let handlers: Arc<Vec<Py<PyAny>>> = Arc::new(
             self.routes
                 .iter()
-                .map(|(_, _, handler, _, _, _)| handler.clone_ref(py))
+                .map(|(_, _, handler, _, _, _, _)| handler.clone_ref(py))
                 .collect(),
         );
 
@@ -133,24 +145,32 @@ impl Server {
         let gates: Arc<Vec<Option<Py<PyAny>>>> = Arc::new(
             self.routes
                 .iter()
-                .map(|(_, _, _, _, _, gate)| gate.as_ref().map(|g| g.clone_ref(py)))
+                .map(|(_, _, _, _, _, gate, _)| gate.as_ref().map(|g| g.clone_ref(py)))
                 .collect(),
         );
 
         let specs: Vec<RouteTuple> = self
             .routes
             .iter()
-            .map(|(method, path, _, params, websocket, gate)| {
+            .map(|(method, path, _, params, websocket, gate, streaming)| {
                 (
                     method.clone(),
                     path.clone(),
                     params.clone(),
                     *websocket,
                     gate.is_some(),
+                    *streaming,
                 )
             })
             .collect();
         let router = Arc::new(Router::build(&specs).map_err(PyValueError::new_err)?);
+        let cors = self
+            .cors
+            .clone()
+            .map(Cors::build)
+            .transpose()
+            .map_err(PyValueError::new_err)?
+            .map(Arc::new);
 
         // Built before the workers, because each Responder needs a handle to
         // spawn its disconnect watcher on.
@@ -159,9 +179,9 @@ impl Server {
             .build()
             .map_err(|e| PyRuntimeError::new_err(format!("tokio runtime: {e}")))?;
 
-        let mut workers = Vec::with_capacity(self.worker_count);
+        let mut workers: Vec<Worker> = Vec::with_capacity(self.worker_count);
         for i in 0..self.worker_count {
-            workers.push(Worker::spawn(
+            let spawned = Worker::spawn(
                 py,
                 i,
                 handlers.clone(),
@@ -170,7 +190,26 @@ impl Server {
                 self.max_concurrency,
                 self.debug,
                 runtime.handle().clone(),
-            )?);
+                self.lifecycle.clone_ref(py),
+            );
+            match spawned {
+                Ok(worker) => workers.push(worker),
+                Err(e) => {
+                    // A worker lifespan that fails usually fails everywhere —
+                    // the database is down — so this is the ordinary startup
+                    // failure, not a rare one. The loops that did start own
+                    // resources, and must release them before the error
+                    // surfaces rather than being abandoned mid-flight.
+                    for worker in &workers {
+                        worker.stop(py);
+                    }
+                    let deadline = Instant::now() + self.shutdown_grace;
+                    for worker in &workers {
+                        worker.join(py, deadline);
+                    }
+                    return Err(e);
+                }
+            }
         }
 
         let state = Arc::new(State {
@@ -180,6 +219,7 @@ impl Server {
             request_timeout: self.request_timeout,
             max_body: self.max_body,
             max_message: self.max_message,
+            cors,
         });
 
         let addr: SocketAddr = format!("{}:{}", self.host, self.port)
@@ -217,6 +257,20 @@ impl Server {
 
         for w in &shutdown.workers {
             w.stop(py);
+        }
+        // Each worker runs its lifespan teardown after its loop stops. Wait for
+        // them, with the same grace again as a bound, before dropping the
+        // runtime and returning: otherwise the process teardown that follows
+        // would run while pools were still closing, or the process would exit
+        // first and cut them off.
+        let deadline = Instant::now() + self.shutdown_grace;
+        let unfinished = shutdown
+            .workers
+            .iter()
+            .filter(|w| !w.join(py, deadline))
+            .count();
+        if unfinished > 0 {
+            eprintln!("aether: {unfinished} worker(s) still tearing down after the shutdown grace");
         }
         drop(runtime);
 
@@ -265,7 +319,7 @@ async fn serve_loop(
                     // Released when the connection task ends.
                     let _permit = permit;
                     let io = TokioIo::new(stream);
-                    let svc = service_fn(move |req| handle(req, state.clone()));
+                    let svc = service_fn(move |req| serve_request(req, state.clone()));
                     // `with_upgrades` is required for 101 responses to hand
                     // the connection over instead of closing it.
                     //
@@ -356,6 +410,57 @@ fn method_not_allowed(allow: String) -> Response<Out> {
         .unwrap()
 }
 
+/// Wait for a streaming route's reply while pumping its body.
+///
+/// The body is pumped by this same future, so it can never outlive the
+/// request: when the reply arrives the pump is dropped, and a handler still
+/// reading learns the body ended early.
+///
+/// The request timeout counts from the body's last progress rather than from
+/// dispatch. A large upload that keeps moving is not cut off; a handler that
+/// stops reading, or stops answering once the body is done, still is. None
+/// means that timeout passed.
+async fn wait_while_streaming<F>(
+    mut reply: oneshot::Receiver<Reply>,
+    mut pump: std::pin::Pin<Box<F>>,
+    shared: &BodyShared,
+    limit: Option<Duration>,
+) -> Option<Result<Reply, oneshot::error::RecvError>>
+where
+    F: std::future::Future<Output = ()>,
+{
+    let mut pumping = true;
+    loop {
+        // While the pump waits on the client, its own idle timeout is the one
+        // that applies; this one only measures a handler that has stalled.
+        let deadline = limit.map(|l| {
+            let from = if shared.waiting_on_client() {
+                Instant::now()
+            } else {
+                shared.last_progress()
+            };
+            tokio::time::Instant::from_std(from + l)
+        });
+        tokio::select! {
+            result = &mut reply => return Some(result),
+            _ = pump.as_mut(), if pumping => pumping = false,
+            _ = async {
+                match deadline {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                // Progress may have been made while this timer was set, or the
+                // wait may belong to the client rather than the handler.
+                let stalled = limit.is_some_and(|l| shared.last_progress() + l <= Instant::now());
+                if stalled && !shared.waiting_on_client() {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
 /// Hand the request to the least-loaded worker with room. False means every
 /// worker is at its limit.
 ///
@@ -392,14 +497,19 @@ fn enqueue(state: &State, pending: Pending) -> bool {
     // stale by the time the push happens, so a full worker still spills over.
     for offset in 0..count {
         let idx = (start + offset) % count;
-        // Cheap: None for every ordinary request, one Arc clone for an upgrade.
+        // Cheap: None for every ordinary request, one Arc clone for an upgrade
+        // or a streaming body.
         let socket = pending.websocket.clone();
+        let body = pending.body_stream.clone();
         match state.workers[idx].queue.try_push(pending) {
             Ok(()) => {
-                // The socket's tokio task wakes the handler through this
-                // queue, so it has to know which worker took it before the
-                // handler can register a waiter.
+                // The socket's task, or the body pump, wakes the handler
+                // through this queue, so it has to know which worker took the
+                // request before the handler can register a waiter.
                 if let Some(shared) = socket {
+                    shared.bind_queue(state.workers[idx].queue.clone());
+                }
+                if let Some(shared) = body {
                     shared.bind_queue(state.workers[idx].queue.clone());
                 }
                 return true;
@@ -465,6 +575,7 @@ async fn upgrade_websocket(
                 reply: verdict_tx,
                 websocket: None,
                 gate: true,
+                body_stream: None,
             },
         );
         if !queued {
@@ -528,6 +639,7 @@ async fn upgrade_websocket(
             reply: reply_tx,
             websocket: Some(shared.clone()),
             gate: false,
+            body_stream: None,
         },
     );
     if !queued {
@@ -554,6 +666,42 @@ async fn upgrade_websocket(
         .header(SEC_WEBSOCKET_ACCEPT, accept)
         .body(full(Bytes::new()))
         .unwrap()
+}
+
+/// CORS around routing. Without a CORS policy this is a single branch.
+async fn serve_request(
+    req: hyper::Request<Incoming>,
+    state: Arc<State>,
+) -> Result<Response<Out>, Infallible> {
+    let Some(cors) = state.cors.clone() else {
+        return handle(req, state).await;
+    };
+    if Cors::is_preflight(req.method(), req.headers()) {
+        return Ok(match cors.preflight(req.headers()) {
+            Ok(headers) => {
+                let mut response = Response::builder()
+                    .status(StatusCode::NO_CONTENT)
+                    .body(full(Bytes::new()))
+                    .unwrap();
+                response.headers_mut().extend(headers);
+                response
+            }
+            // Refused with a reason rather than a bare 204 with no headers:
+            // the browser fails either way, and only this one says why.
+            Err(reason) => {
+                let mut response = plain(StatusCode::BAD_REQUEST, reason);
+                cors.decorate(None, response.headers_mut());
+                response
+            }
+        });
+    }
+    let origin = req.headers().get(hyper::header::ORIGIN).cloned();
+    let mut response = handle(req, state).await?;
+    // A socket upgrade is not subject to CORS; an authorizer checks `Origin`.
+    if response.status() != StatusCode::SWITCHING_PROTOCOLS {
+        cors.decorate(origin.as_ref(), response.headers_mut());
+    }
+    Ok(response)
 }
 
 async fn handle(
@@ -602,13 +750,32 @@ async fn handle(
     // Moved, not copied: handing the whole map over costs nothing, and a
     // handler that never reads a header never pays to convert one.
     let headers = std::mem::take(req.headers_mut());
-    let collected = match Limited::new(req.into_body(), state.max_body)
-        .collect()
-        .await
-    {
-        Ok(collected) => collected,
-        Err(err) if err.downcast_ref::<LengthLimitError>().is_some() => return Ok(too_large()),
-        Err(_) => return Ok(plain(StatusCode::BAD_REQUEST, "bad body")),
+
+    // A streaming route is handed to its worker before the body is read; any
+    // other waits here until the body is complete and within the limit.
+    let (body, stream, pump) = if state.router.spec(matched.route).streaming {
+        let declared = headers
+            .get(CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        let shared = BodyShared::new();
+        let pump = Box::pin(crate::body::pump(
+            req.into_body(),
+            declared,
+            shared.clone(),
+            state.max_body,
+            state.request_timeout,
+        ));
+        (Vec::new(), Some(shared), Some(pump))
+    } else {
+        match Limited::new(req.into_body(), state.max_body)
+            .collect()
+            .await
+        {
+            Ok(collected) => (collected.to_bytes().to_vec(), None, None),
+            Err(err) if err.downcast_ref::<LengthLimitError>().is_some() => return Ok(too_large()),
+            Err(_) => return Ok(plain(StatusCode::BAD_REQUEST, "bad body")),
+        }
     };
 
     let (reply_tx, reply_rx) = oneshot::channel::<Reply>();
@@ -618,11 +785,12 @@ async fn handle(
         method,
         path,
         query,
-        body: collected.to_bytes().to_vec(),
+        body,
         headers,
         reply: reply_tx,
         websocket: None,
         gate: false,
+        body_stream: stream.clone(),
     };
 
     // No Python involvement on this thread: plain Rust data plus one byte
@@ -635,17 +803,20 @@ async fn handle(
 
     // Waiting only for the *first* reply, so a long-lived SSE stream is not
     // affected: its headers go out as soon as the handler starts streaming.
-    let replied = match state.request_timeout {
-        Some(limit) => match tokio::time::timeout(limit, reply_rx).await {
-            Ok(result) => result,
-            Err(_) => {
-                return Ok(plain(
-                    StatusCode::GATEWAY_TIMEOUT,
-                    "handler did not respond in time",
-                ))
-            }
+    let replied = match (pump, stream) {
+        (Some(pump), Some(shared)) => {
+            wait_while_streaming(reply_rx, pump, &shared, state.request_timeout).await
+        }
+        _ => match state.request_timeout {
+            Some(limit) => tokio::time::timeout(limit, reply_rx).await.ok(),
+            None => Some(reply_rx.await),
         },
-        None => reply_rx.await,
+    };
+    let Some(replied) = replied else {
+        return Ok(plain(
+            StatusCode::GATEWAY_TIMEOUT,
+            "handler did not respond in time",
+        ));
     };
 
     match replied {
