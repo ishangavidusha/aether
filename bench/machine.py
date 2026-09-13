@@ -454,6 +454,11 @@ def stamp() -> str:
 
 def main() -> None:
     facts = fingerprint()
+    if "--json" in sys.argv:
+        # For a caller that wants the facts of a host it cannot import from,
+        # such as the inside of a container.
+        print(json.dumps(facts))
+        return
     print(summarise(facts))
     print()
     print(json.dumps(facts, indent=2))

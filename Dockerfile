@@ -44,3 +44,20 @@ COPY examples ./examples
 # container, so apps here must listen on 0.0.0.0.
 EXPOSE 8000
 CMD ["python", "-c", "import aether, sys; print('aether ready on', sys.version)"]
+
+# ---------- benchmark image ----------
+# The runtime plus a load generator and the bench scripts, for measuring inside
+# Docker's own network. Not the runtime image: nothing that ships should carry
+# oha. Built with `make image-bench`.
+FROM rust:1-slim-bookworm AS oha
+# oha links jemalloc, whose build script shells out to make, which the slim
+# image does not have.
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends make \
+    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo install oha --locked --root /oha
+
+FROM runtime AS bench
+COPY --from=oha /oha/bin/oha /usr/local/bin/oha
+RUN uv pip install --python /app/.venv/bin/python pydantic httpx
+COPY bench ./bench

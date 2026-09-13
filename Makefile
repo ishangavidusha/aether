@@ -4,7 +4,7 @@ FT_PY  := 3.14.7+freethreaded
 # recorded before benchmarks ever left it. Anywhere else, uv fetches its own.
 GIL_PY := $(shell test -x /opt/homebrew/bin/python3.14 && echo /opt/homebrew/bin/python3.14 || echo 3.14)
 
-.PHONY: machine bench-collect venvs build build-ft build-gil docs docs-serve coverage coverage-rust lint run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil bench-all verify verify-gil up down logs image stack stack-down clean
+.PHONY: image-bench bench-imbalance bench-streams bench-container machine bench-collect venvs build build-ft build-gil docs docs-serve coverage coverage-rust lint run bench bench-gil bench-cpu bench-cpu-gil sweep sweep-gil bench-all verify verify-gil up down logs image stack stack-down clean
 
 venvs:
 	uv venv --python $(FT_PY) .venv
@@ -41,7 +41,7 @@ bench-cpu-gil: build-gil
 # how a suite ends up running on one interpreter and not the other.
 SUITES := workers routing query bodies openapi capabilities streams sse \
           websocket hardening escaping wire failures plumbing injection \
-          durable backpressure verify
+          durable backpressure assignment verify
 
 # SUITE_TIMEOUT is empty locally and set to `timeout 300` in CI, where a hung
 # suite would otherwise burn the whole job. Echo the name first: a suite that
@@ -136,13 +136,19 @@ PROFILE ?= full
 STRICT  ?= --strict
 
 ifeq ($(PROFILE),quick)
-RUN_ARGS   := --duration 3 --warmup 1
-CPU_ARGS   := --duration 3
-SWEEP_ARGS := --duration 2 --costs 0 50 500
+RUN_ARGS       := --duration 3 --warmup 1
+CPU_ARGS       := --duration 3
+SWEEP_ARGS     := --duration 2 --costs 0 50 500
+IMBALANCE_ARGS := --duration 3 --conns 512
+STREAMS_ARGS   := --subscribers 10 100 --deliveries 20000 --connections 10 --seconds 2
 else
-RUN_ARGS   := --duration 10
-CPU_ARGS   := --duration 6
-SWEEP_ARGS := --duration 5
+RUN_ARGS       := --duration 10
+CPU_ARGS       := --duration 6
+SWEEP_ARGS     := --duration 5
+# 512 connections, so the load generator never runs out of them and reports
+# its own backlog as server latency.
+IMBALANCE_ARGS := --conns 512
+STREAMS_ARGS   :=
 endif
 
 bench-all: build
@@ -158,6 +164,10 @@ bench-all: build
 	.venv/bin/python bench/sweep.py --python .venv/bin/python $(SWEEP_ARGS) $(STRICT)
 	@echo "== handler cost against loop count, gil"
 	.venv-gil/bin/python bench/sweep.py --python .venv-gil/bin/python $(SWEEP_ARGS) $(STRICT)
+	@echo "== slow handlers against worker assignment, free-threaded"
+	.venv/bin/python bench/imbalance.py --python .venv/bin/python $(IMBALANCE_ARGS) $(STRICT)
+	@echo "== sse fan-out and websocket echo, free-threaded"
+	.venv/bin/python bench/streams.py --python .venv/bin/python $(STREAMS_ARGS) $(STRICT)
 	@$(MAKE) --no-print-directory bench-collect
 
 # One tarball to copy off a host that is about to be destroyed. Named for the
@@ -170,6 +180,16 @@ bench-collect:
 import machine;print(machine.machine_id(machine.fingerprint()))"); \
 	out=bench/results-$$id-$$(date +%Y%m%d-%H%M%S).tar.gz; \
 	tar czf $$out -C bench results && echo "collected $$out"
+
+bench-imbalance: build-ft
+	.venv/bin/python bench/imbalance.py --python .venv/bin/python --conns 512
+
+bench-streams: build-ft
+	.venv/bin/python bench/streams.py --python .venv/bin/python
+
+# Native against containerised, in one session. Needs Docker and image-bench.
+bench-container: build-ft image-bench
+	.venv/bin/python bench/container.py --python .venv/bin/python
 
 machine:
 	@$(BENCH_PY) bench/machine.py
@@ -201,7 +221,11 @@ logs:
 # Build the app image, and run a two-node stack against one Redis. This is the
 # only way to exercise cross-process fan-out the way it actually ships.
 image:
-	$(DOCKER) build -t aether:dev .
+	$(DOCKER) build --target runtime -t aether:dev .
+
+# The runtime image plus oha and bench/, for measuring inside Docker's network.
+image-bench:
+	$(DOCKER) build --target bench -t aether:bench .
 
 stack: image
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.stack.yml up -d --wait

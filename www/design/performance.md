@@ -56,9 +56,40 @@ of those straight and disables background package updates.
     measured across every run and reported; a host that gives away CPU
     mid-measurement invalidates it, and no amount of averaging recovers it.
 
-    **Never benchmark through Docker.** Docker Desktop on macOS measured 3.4x
-    slower for the same image, and the cost is the VM's port boundary, not the
-    code.
+    **Never benchmark through a published port on Docker Desktop.** Traffic
+    crossing from macOS into the Linux VM through `-p` measured 3.3x slower
+    than native, and that cost is the port forwarding, not the container. A
+    load generator in a second container on the same Docker network avoids it
+    entirely. Container numbers are compared with container numbers; across
+    the boundary only ratios measured in the same session mean anything.
+
+## Containers
+
+`bench/container.py` runs the same hello-world server natively and in Docker
+in one session, with native measured first and last so drift is visible. On the
+machine above, with Docker Desktop's VM given all ten cores:
+
+| scenario | loops | req/s | vs native | p99 ms |
+|---|---:|---:|---:|---:|
+| native (macOS) | 4 | 182,378 | 1.00x | 2.41 |
+| container, load generator on the Docker network | 8 | 230,347 | 1.26x | 0.79 |
+| container, load generator on the host via `-p` | 8 | 55,199 | 0.30x | 2.48 |
+| container, `--cpus 4` | 4 | 231,177 | 1.27x | 0.64 |
+| container, `--cpus 2` | 2 | 166,270 | 0.91x | 0.55 |
+| container, `--cpus 1` | 1 | 123,288 | 0.68x | 0.50 |
+
+Linux in the VM is faster than macOS natively at the same loop count, with a
+far tighter tail: the difference is the operating system's network stack and
+scheduler, not the framework. A CPU quota sets the loop count, because worker
+detection reads the cgroup limit rather than the host's core count.
+
+Inside a VM on Apple Silicon, detection cannot see which cores are efficiency
+cores and starts eight loops where four perform the same.
+
+```bash
+make image-bench      # the runtime image plus oha and the bench scripts
+make bench-container  # the table above, for this machine
+```
 
 ## Hello world
 
@@ -166,6 +197,58 @@ trade-off governs body limits and error detail: fail safely by default, and set
 Numbers taken before that change describe a different server and are not
 comparable with the ones above.
 
+## Slow handlers
+
+A handler that computes rather than awaits holds its worker loop until it
+returns. Each request goes to the least-loaded worker — queued plus in-flight —
+and a held loop cannot drain, so requests route around it. `bench/imbalance.py`
+runs a fixed-rate stream of trivial requests alongside handlers that hold a loop
+for 50 ms, with latency correction so a stalled request counts from when it
+should have been sent. Four loops, 2,000 req/s:
+
+| alongside | p90 ms, round-robin | p90 ms, least-loaded | p99 ms, round-robin | p99 ms, least-loaded |
+|---|---:|---:|---:|---:|
+| nothing | 0.29 | 0.29 | 0.56 | 0.46 |
+| 1 CPU-bound handler | 29.68 | 0.14 | 47.72 | 0.28 |
+| 2 CPU-bound handlers | 39.39 | 0.15 | 48.82 | 36.61 |
+| 3 CPU-bound handlers | 55.53 | 0.20 | 95.23 | 48.89 |
+| 4 I/O-bound handlers | 0.32 | 0.30 | 0.50 | 0.45 |
+
+Round-robin gave a held loop its full share of requests: with one of four held,
+a quarter of all requests waited up to the whole 50 ms. The residual tail under
+least-loaded assignment is the few requests that arrive before a loop's load
+reflects the handler holding it.
+
+On hello world, least-loaded assignment is 2–5% faster than round-robin on
+Linux with the same or lower p99. On macOS it is 3% faster with a p99 about
+1 ms higher.
+
+## Streams
+
+`bench/streams.py` measures SSE fan-out and WebSocket echo against a Python
+load generator on the same machine. It records the server's CPU per thousand
+operations, which holds whatever the client's speed, and flags a run where the
+client processes were saturated.
+
+| SSE subscribers | events each | deliveries/s | missing | server CPU ms per 1,000 |
+|---:|---:|---:|---:|---:|
+| 10 | 20,000 | 79,061 | 0 | 39.2 |
+| 100 | 2,000 | 138,737 | 0 | 29.8 |
+| 1,000 | 200 | 145,943 | 0 | 29.9 |
+
+The topic uses the `block` policy, so every event reaches every subscriber and
+the rate is lossless. At low fan-out the single publishing handler is the limit
+rather than delivery.
+
+| WebSocket connections | round trips/s | server CPU ms per 1,000 |
+|---:|---:|---:|
+| 10 | 66,967 | 40.6 |
+| 100 | 142,715 (client-bound) | 28.9 |
+| 1,000 | 128,975 (client-bound) | 30.6 |
+
+Above 100 connections the Python client saturates first, so those rates are a
+floor for the server rather than its ceiling.
+
 ## What has not been measured
 
 These are open, not assumed. An unmeasured claim is not a result:
@@ -178,5 +261,6 @@ These are open, not assumed. An unmeasured claim is not a result:
 - **Scaling past 8 loops** on a large homogeneous Linux machine. The cap of 8
   is a guard against an absurd probe result, not a measured ceiling; this
   machine has four performance cores and cannot answer the question.
-- **Streaming throughput.** SSE and WebSocket have correctness tests and no
-  performance numbers at all.
+- **The WebSocket ceiling.** Above 100 connections the Python load generator
+  saturates before the server does; finding the server's limit needs a faster
+  client.

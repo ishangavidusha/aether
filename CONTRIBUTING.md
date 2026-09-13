@@ -30,7 +30,7 @@ because this is a Python extension module rather than a binary.
 ## Tests
 
 ```bash
-make verify        # eighteen suites, free-threaded
+make verify        # nineteen suites, free-threaded
 make verify-gil    # the same suites on the GIL build
 ```
 
@@ -70,8 +70,11 @@ a `powersave` governor, or a host stealing CPU from its guest is marked
 untrustworthy rather than quietly kept.
 
 ```bash
-make machine       # what this host is, and whether it is fit to measure on
-make bench-all     # the whole battery, both builds, into one archive
+make machine          # what this host is, and whether it is fit to measure on
+make bench-all        # the whole battery, both builds, into one archive
+make bench-imbalance  # slow handlers against worker assignment
+make bench-streams    # SSE fan-out and WebSocket echo
+make bench-container  # native against Docker, in one session
 ```
 
 `make bench-all` refuses to run on a host that fails preflight; pass
@@ -80,6 +83,12 @@ A fresh Linux benchmark host is set up by `bench/provision.sh`.
 
 Numbers from a shared vCPU are not reproducible and no amount of averaging
 makes them so. Measure on dedicated CPU.
+
+In Docker Desktop, put the load generator in a container on the same Docker
+network, never on the host through a published port: the port forwarding alone
+costs more than 3x and swamps anything being measured. Compare container
+numbers with container numbers, and native with container only as a ratio taken
+in one session.
 
 **Protocol work is verified against a real client**, not against a reading of
 the specification. The OpenAPI document goes through `openapi-spec-validator`;

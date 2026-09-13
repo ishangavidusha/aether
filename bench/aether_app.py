@@ -41,7 +41,8 @@ async def search(_: Request, q: str, limit: int = 10):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
+    p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--workers", type=int, default=None)
     a = p.parse_args()
-    app.run(port=a.port, workers=a.workers)
+    app.run(host=a.host, port=a.port, workers=a.workers)

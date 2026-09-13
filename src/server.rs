@@ -356,12 +356,40 @@ fn method_not_allowed(allow: String) -> Response<Out> {
         .unwrap()
 }
 
-/// Find a worker with room and hand it the request. False means every worker
-/// is at its limit.
+/// Hand the request to the least-loaded worker with room. False means every
+/// worker is at its limit.
+///
+/// Round-robin alone sent every Nth request to a loop held by a handler that
+/// computes rather than awaits, where it waited out the whole computation while
+/// the other loops sat idle: one such handler on four loops put a quarter of all
+/// requests up to its full hold time behind it (I-018). Load is queued plus
+/// in-flight, and a held loop cannot drain, so its load climbs with each request
+/// it is given and the scan steers the next ones elsewhere.
+///
+/// The scan starts at a rotating offset so ties still spread evenly, and stops
+/// at the first idle worker, which on a lightly loaded server is the first one
+/// it looks at.
 fn enqueue(state: &State, pending: Pending) -> bool {
     let mut pending = pending;
-    let start = state.next_worker.fetch_add(1, Ordering::Relaxed);
+    let rotation = state.next_worker.fetch_add(1, Ordering::Relaxed);
     let count = state.workers.len();
+
+    let mut start = rotation % count;
+    let mut lightest = usize::MAX;
+    for offset in 0..count {
+        let idx = (rotation + offset) % count;
+        let load = state.workers[idx].queue.load();
+        if load < lightest {
+            lightest = load;
+            start = idx;
+            if load == 0 {
+                break;
+            }
+        }
+    }
+
+    // Lightest first, then round from there: the load read above is already
+    // stale by the time the push happens, so a full worker still spills over.
     for offset in 0..count {
         let idx = (start + offset) % count;
         // Cheap: None for every ordinary request, one Arc clone for an upgrade.

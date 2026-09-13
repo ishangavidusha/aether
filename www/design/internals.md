@@ -26,9 +26,11 @@ python/aether/  App, routing, pydantic, OpenAPI, topics, SSE, sockets, runtime
    cannot succeed — bad path parameter, missing required query parameter, wrong
    method, body over the limit — is answered here, and no Python worker is ever
    woken.
-3. The request becomes a plain Rust struct and is pushed onto a worker's
-   bounded queue. If the queue plus in-flight count is at the limit it tries
-   another worker; if every worker is full the answer is `503`.
+3. The request becomes a plain Rust struct and is pushed onto the bounded
+   queue of the least-loaded worker, counting queued plus in-flight requests.
+   A loop held by a handler that computes cannot drain, so its count stays
+   high and new requests go elsewhere. If that worker is at its limit it tries
+   the next; if every worker is full the answer is `503`.
 4. If no wakeup is already in flight, one byte goes down a socketpair.
 5. The worker's asyncio loop wakes through `add_reader`. A native drain
    callback clears the flag, pops **every** queued request, and schedules each
@@ -120,5 +122,3 @@ a running server before it was fixed.
 - Middleware does not wrap socket handlers, only their authorizer.
 - MCP is POST/JSON only: no streaming responses, no server-to-client channel,
   no resource subscriptions.
-- Worker assignment is round-robin. Whether one loop's queue backs up while
-  others idle, under slow handlers, has not been measured.
