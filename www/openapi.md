@@ -22,7 +22,11 @@ document = app.openapi()
 
 `app.openapi()` returns the document without starting anything, which makes it
 usable for client generation in CI, or for a test that asserts the API did not
-change accidentally.
+change accidentally. From the command line:
+
+```bash
+oxbrook openapi main:app -o openapi.json
+```
 
 ## What ends up in it
 

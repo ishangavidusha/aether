@@ -1,23 +1,79 @@
 # Running a server
 
+```bash
+oxbrook run main:app
+```
+
+The target is `module:attribute` — here, the `app` in `main.py` — imported from
+the working directory. With no attribute, `app` is assumed. The same command is
+installed as `oxb`, and runs as `python -m oxbrook`.
+
+From Python, the same server with the same options:
+
 ```python
 app.run(host="0.0.0.0", port=8000)
 ```
 
-`run` serves until interrupted. Every option below can also be passed to
-`app.build_server(...)`, which prepares a server without starting it — that is
-what the [test client](guide/testing.md) uses.
+Every option can also be passed to `app.build_server(...)`, which prepares a
+server without starting it — that is what the [test client](guide/testing.md)
+uses.
 
-| option | default | what it does |
-|---|---|---|
-| `host` | `127.0.0.1` | interface to bind |
-| `port` | `8000` | port to bind |
-| `workers` | detected | Python worker loops |
-| `max_concurrency` | 1024 | requests per worker, queued plus in-flight |
-| `max_connections` | 2048 | sockets held open |
-| `max_body` | 16 MiB | largest request body |
-| `request_timeout` | 30.0 | seconds to a handler's first response |
-| `shutdown_grace` | 10.0 | seconds Ctrl-C waits for in-flight requests |
+| command line | `app.run` | default | what it does |
+|---|---|---|---|
+| `--host` | `host` | `127.0.0.1` | interface to bind |
+| `--port` | `port` | `8000` | port to bind |
+| `--workers` | `workers` | detected | Python worker loops |
+| `--max-concurrency` | `max_concurrency` | 1024 | requests per worker, queued plus in-flight |
+| `--max-connections` | `max_connections` | 2048 | sockets held open |
+| `--max-body` | `max_body` | 16 MiB | largest request body, in bytes |
+| `--max-message` | `max_message` | 16 MiB | largest WebSocket message, in bytes |
+| `--request-timeout` | `request_timeout` | 30.0 | seconds to a handler's first response |
+| `--shutdown-grace` | `shutdown_grace` | 10.0 | seconds a stop waits for in-flight requests |
+
+The command also takes `--access-log`, to log every request, and
+`--log-level`, which sets the level of Oxbrook's own loggers.
+
+## Reloading during development
+
+```bash
+oxbrook run main:app --reload
+```
+
+Saving a Python file under the working directory restarts the server. Each
+restart is a new process, not modules re-imported in place: the Rust extension
+cannot be reloaded inside a running interpreter, and a fresh process runs the
+[lifespans](guide/lifespan.md) again, so after a reload the app is in exactly
+the state a deploy would leave it in.
+
+- `--reload-dir DIR` watches another directory, and can be repeated.
+- `--reload-include '*.html'` restarts for other files too.
+- Hidden directories, `__pycache__`, `node_modules`, `venv`, `target`, `site`,
+  `dist` and `build` are never watched.
+
+A syntax error stops the server, not the watcher: the error is printed, and the
+next save starts it again. A server being replaced gets one second to finish its
+requests rather than the usual ten, so an open SSE stream in a browser does not
+hold every restart; `--shutdown-grace` overrides that.
+
+`--reload` is for development. It polls files for changes and runs a second
+process to do it.
+
+## Inspecting an app
+
+```bash
+oxbrook routes main:app          # every route, including the built-in ones
+oxbrook routes main:app --json
+oxbrook openapi main:app -o openapi.json
+```
+
+`routes` marks tools, WebSockets, streaming bodies, forms and router middleware,
+and lists `/openapi.json`, `/docs` and `/mcp` as the server would serve them.
+`openapi` writes the document without starting a server, for generating clients
+in CI.
+
+For an app built by a function, pass `--factory`: `oxbrook run main:create_app
+--factory`. A target that cannot be loaded exits with status 2 and says why;
+an exception raised while importing the app shows its traceback.
 
 ## Worker loops
 
@@ -113,14 +169,28 @@ make down      # stop everything
 Bind to `0.0.0.0` inside a container. Anything listening only on loopback is
 unreachable from outside it.
 
-!!! warning "Do not benchmark through Docker"
+```dockerfile
+CMD ["oxbrook", "run", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
 
-    Docker Desktop on macOS measured **3.4x slower** than native for the same
-    image, and the cost is the VM's port boundary rather than anything in the
-    code. Container numbers and native numbers are not comparable. See
-    [performance](design/performance.md).
+Use the exec form, as above, so the server is the process that receives the
+container's stop signal. Wrapped in a shell, the shell receives it instead.
+
+!!! warning "Benchmark on the Docker network, not through a published port"
+
+    Traffic from macOS into Docker Desktop's VM through `-p` measured **3.3x
+    slower** than native, and the cost is the port forwarding, not the
+    container: with the load generator in a second container on the same
+    network, the same image measured faster than native. See
+    [performance](design/performance.md#containers).
 
 ## Shutdown
 
-Ctrl-C stops accepting, waits up to `shutdown_grace` for in-flight requests,
-then stops regardless. Streams and sockets are closed.
+Ctrl-C (`SIGINT`) and `SIGTERM` both stop the server gracefully: it stops
+accepting, waits up to `shutdown_grace` for in-flight requests, runs the
+lifespan teardown, then exits with status 0. Streams and sockets are closed.
+
+`SIGTERM` is what `docker stop`, Kubernetes and systemd send, so a deploy drains
+requests rather than cutting them off. Set the orchestrator's own grace period —
+`terminationGracePeriodSeconds`, `docker stop --time` — longer than
+`shutdown_grace`, or it kills the process before the drain ends.

@@ -137,9 +137,17 @@ impl Server {
         self.stop.notify_waiters();
     }
 
-    /// Start workers, bind, and serve until Ctrl-C or `shutdown`. Blocks the
-    /// calling thread but detaches from the interpreter for the duration.
-    fn serve(&self, py: Python<'_>) -> PyResult<()> {
+    /// Start workers, bind, and serve until SIGINT, SIGTERM or `shutdown`.
+    /// Blocks the calling thread but detaches from the interpreter for the
+    /// duration.
+    ///
+    /// `handle_signals` is false when serving from a thread other than the
+    /// main one, as the test client does. A signal handler, once installed,
+    /// stays for the life of the process, so a test run that had started a
+    /// server afterwards ignored SIGTERM and Ctrl-C altogether. Python itself
+    /// only handles signals on the main thread, and this follows it.
+    #[pyo3(signature = (handle_signals = true))]
+    fn serve(&self, py: Python<'_>, handle_signals: bool) -> PyResult<()> {
         let handlers: Arc<Vec<Py<PyAny>>> = Arc::new(
             self.routes
                 .iter()
@@ -237,8 +245,9 @@ impl Server {
         let stop = self.stop.clone();
         let quiet = self.quiet;
         let slots = self.max_connections;
-        let result: Result<(), String> =
-            py.detach(|| runtime.block_on(serve_loop(addr, state, stop, slots, quiet)));
+        let result: Result<(), String> = py.detach(|| {
+            runtime.block_on(serve_loop(addr, state, stop, slots, quiet, handle_signals))
+        });
 
         // Draining. The listener has stopped, but connection tasks are still
         // on the runtime and handlers are still on the worker loops, so wait
@@ -293,6 +302,7 @@ async fn serve_loop(
     stop: Arc<Notify>,
     max_connections: usize,
     quiet: bool,
+    handle_signals: bool,
 ) -> Result<(), String> {
     let listener = TcpListener::bind(addr)
         .await
@@ -300,6 +310,19 @@ async fn serve_loop(
     if !quiet {
         println!("Oxbrook listening on http://{addr}");
     }
+
+    // SIGTERM is how a container runtime, systemd or Kubernetes asks a process
+    // to stop, and it gets the same graceful drain as Ctrl-C. Unhandled, its
+    // default action killed the process outright: in-flight requests cut off,
+    // lifespan teardown never run, exit code 143.
+    let mut terminate = if handle_signals {
+        Some(
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .map_err(|e| format!("installing the SIGTERM handler: {e}"))?,
+        )
+    } else {
+        None
+    };
 
     // `max_concurrency` bounds requests handed to a worker, which is not the
     // same as sockets held open. An idle keep-alive connection costs a file
@@ -344,7 +367,21 @@ async fn serve_loop(
                         .await;
                 });
             }
-            _ = tokio::signal::ctrl_c() => break,
+            _ = async {
+                if handle_signals {
+                    let _ = tokio::signal::ctrl_c().await;
+                } else {
+                    std::future::pending::<()>().await
+                }
+            } => break,
+            _ = async {
+                match terminate.as_mut() {
+                    Some(signal) => {
+                        signal.recv().await;
+                    }
+                    None => std::future::pending::<()>().await,
+                }
+            } => break,
             _ = stop.notified() => break,
         }
     }

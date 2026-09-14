@@ -11,6 +11,13 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = ["pydantic>=2.9"]
 
+
+[project.scripts]
+# Two names for one command: `oxbrook` in documentation, `oxb` to type. `ox`
+# was taken, by a terminal text editor Homebrew installs.
+oxbrook = "oxbrook._cli:entry"
+oxb = "oxbrook._cli:entry"
+
 [project.optional-dependencies]
 redis = ["redis>=5"]
 bench = ["uvicorn", "granian", "fastapi"]
@@ -47,3 +54,10 @@ ignore = [
 "tests/*" = ["BLE001"]
 "bench/*" = ["BLE001", "UP031", "E501"]
 "examples/*" = ["BLE001"]
+
+[tool.coverage.run]
+# The CLI suite drives real `oxbrook` processes, and the reload supervisor
+# starts servers of its own. Without following them, every line of the CLI
+# would count as unexecuted. `make coverage` passes absolute paths for the data
+# file and the source, because those processes run from another directory.
+patch = ["subprocess"]

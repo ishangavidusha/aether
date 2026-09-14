@@ -193,11 +193,17 @@ class ServerHandle:
         self._lifecycle = lifecycle
 
     def serve(self) -> None:
+        import threading
+
+        # Signals are handled only when serving from the main thread, as Python
+        # does. A server on a background thread — the test client's — leaves
+        # the process's signal handling as it found it.
+        main_thread = threading.current_thread() is threading.main_thread()
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(self._lifecycle.start_process())
             try:
-                self._core.serve()
+                self._core.serve(main_thread)
             finally:
                 loop.run_until_complete(self._lifecycle.stop_process())
         finally:

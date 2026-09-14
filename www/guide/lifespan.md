@@ -91,7 +91,7 @@ has finished.
 
 ## Shutdown
 
-On Ctrl-C the server stops accepting, lets in-flight requests finish within
+On Ctrl-C or `SIGTERM` the server stops accepting, lets in-flight requests finish within
 `shutdown_grace`, then stops each worker loop and runs its shutdown, then runs
 `lifespan`'s. The server waits for worker shutdown to finish before running the
 process shutdown and returning.

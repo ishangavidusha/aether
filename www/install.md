@@ -46,8 +46,11 @@ if __name__ == "__main__":
 ```
 
 ```bash
-python app.py
+oxbrook run app:app --reload     # or: python app.py
 ```
+
+Installing Oxbrook puts two commands on the environment's path, `oxbrook` and
+its short form `oxb`. See [Running a server](running.md) for what they do.
 
 That gives you, without further configuration:
 

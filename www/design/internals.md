@@ -126,12 +126,13 @@ Each worker thread runs `worker_lifespan` on its own loop before registering
 its drain callback, and again after its loop stops, having first removed the
 callback so nothing new starts during teardown. Workers start one at a time; if
 one fails, the ones already running are stopped and joined before the error
-surfaces. At shutdown the server waits for every worker thread, bounded by
-`shutdown_grace`, and only then runs the process `lifespan`'s teardown.
+surfaces. At shutdown — on `SIGINT` or `SIGTERM`, both handled in the accept loop — the
+server waits for every worker thread, bounded by `shutdown_grace`, and only
+then runs the process `lifespan`'s teardown.
 
 ## Testing
 
-Twenty-four standalone scripts under `tests/`, each exiting non-zero on
+Twenty-five standalone scripts under `tests/`, each exiting non-zero on
 failure, run against a real server on a real socket.
 
 ```bash

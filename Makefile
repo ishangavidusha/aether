@@ -41,7 +41,7 @@ bench-cpu-gil: build-gil
 # how a suite ends up running on one interpreter and not the other.
 SUITES := workers routing query bodies openapi capabilities streams sse \
           websocket hardening escaping wire failures plumbing injection \
-          durable backpressure assignment composition lifespan cors uploads origins verify
+          durable backpressure assignment composition lifespan cors uploads origins cli verify
 
 # SUITE_TIMEOUT is empty locally and set to `timeout 300` in CI, where a hung
 # suite would otherwise burn the whole job. Echo the name first: a suite that
@@ -59,11 +59,14 @@ verify-gil: build-gil
 # report would understate the runtime by a wide margin.
 COVERAGE_MIN := 85
 
+# Paths are absolute because the CLI suite's processes run from a temporary
+# project directory, and subprocess measurement (pyproject) follows them there.
 coverage: build-ft
-	@rm -f .coverage .coverage.[0-9]* 2>/dev/null || true
+	@rm -f .coverage .coverage.* 2>/dev/null || true
 	@for s in $(SUITES); do echo "== $$s"; \
-		COVERAGE_CORE=sysmon $(SUITE_TIMEOUT) .venv/bin/python -m coverage run --branch -p \
-			--source=python/oxbrook tests/$$s.py || exit 1; \
+		COVERAGE_FILE=$(CURDIR)/.coverage COVERAGE_CORE=sysmon $(SUITE_TIMEOUT) \
+			.venv/bin/python -m coverage run --branch -p \
+			--source=$(CURDIR)/python/oxbrook tests/$$s.py || exit 1; \
 	done
 	@.venv/bin/python -m coverage combine -q
 	@.venv/bin/python -m coverage report --precision=1 --sort=cover \

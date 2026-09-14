@@ -4,6 +4,7 @@ A fast Python REST framework with a Rust core, built-in reactive streams, and
 agent-native interfaces.
 
 ```python
+# main.py
 from oxbrook import App, Request
 
 app = App()
@@ -11,8 +12,10 @@ app = App()
 @app.get("/")
 async def hello(_: Request):
     return {"hello": "world"}
+```
 
-app.run(port=8000)
+```bash
+oxbrook run main:app --reload
 ```
 
 !!! warning "Not a supported product"
