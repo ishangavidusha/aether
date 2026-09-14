@@ -1,5 +1,5 @@
 # Capabilities
 
-::: aether.Capability
+::: oxbrook.Capability
 
-::: aether.CapabilityError
+::: oxbrook.CapabilityError

@@ -1,6 +1,6 @@
-"""Aether app with a fast route and two kinds of slow one, for bench/imbalance.py.
+"""Oxbrook app with a fast route and two kinds of slow one, for bench/imbalance.py.
 
-`/cpu` holds its worker loop for `AETHER_SLOW_MS` of pure computation: nothing
+`/cpu` holds its worker loop for `OXBROOK_SLOW_MS` of pure computation: nothing
 else on that loop runs until it returns. `/io` waits the same time in
 `asyncio.sleep`, which frees the loop. The difference between them is the whole
 question — a request assigned to a loop blocked by `/cpu` waits, one assigned to
@@ -11,10 +11,10 @@ import asyncio
 import os
 import time
 
-from aether import App, Request
+from oxbrook import App, Request
 
 app = App(openapi_url=None, docs_url=None, mcp_url=None)
-SLOW = int(os.environ.get("AETHER_SLOW_MS", "50")) / 1000
+SLOW = int(os.environ.get("OXBROOK_SLOW_MS", "50")) / 1000
 
 
 @app.get("/fast")

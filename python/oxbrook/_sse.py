@@ -1,6 +1,6 @@
 """Server-Sent Events.
 
-Return an `SSE` from a handler and Aether streams it: headers go out
+Return an `SSE` from a handler and Oxbrook streams it: headers go out
 immediately, then every item the source yields becomes an event.
 
     @app.get("/feed")

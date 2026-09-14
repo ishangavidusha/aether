@@ -5,7 +5,7 @@ pool, loading a model, closing clients cleanly.
 
 ```python
 from contextlib import asynccontextmanager
-from aether import App, Request
+from oxbrook import App, Request
 
 @asynccontextmanager
 async def lifespan(app):
@@ -30,7 +30,7 @@ async def users(request: Request):
 
 ## Why there are two
 
-Aether runs one asyncio loop per worker thread, several of them in one process.
+Oxbrook runs one asyncio loop per worker thread, several of them in one process.
 An asyncio connection pool, an `httpx.AsyncClient`, or a Redis client belongs to
 the loop that created it and cannot be used from another. A single startup hook
 would create one pool that only one loop could use, and the failure would show

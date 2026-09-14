@@ -3,7 +3,7 @@ requires = ["maturin>=1.9,<2"]
 build-backend = "maturin"
 
 [project]
-name = "aether"
+name = "oxbrook"
 version = "0.0.1"
 description = "Fast Python REST framework with a Rust core, built-in streams, and agent-native interfaces"
 requires-python = ">=3.13"
@@ -19,7 +19,7 @@ docs = ["mkdocs-material>=9.5", "mkdocstrings[python]>=0.26", "ruff"]
 
 [tool.maturin]
 python-source = "python"
-module-name = "aether._core"
+module-name = "oxbrook._core"
 features = ["pyo3/extension-module"]
 
 [tool.ruff]

@@ -19,9 +19,9 @@ import threading
 import time
 
 import httpx
-from aether import App, Request
-from aether._workers import gil_enabled
-from aether.testing import TestClient
+from oxbrook import App, Request
+from oxbrook._workers import gil_enabled
+from oxbrook.testing import TestClient
 
 WORKERS = 4
 HOLD = 0.4

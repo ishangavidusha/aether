@@ -1,10 +1,10 @@
-# Aether
+# Oxbrook
 
 A fast Python REST framework with a Rust core, built-in reactive streams, and
 agent-native interfaces.
 
 ```python
-from aether import App, Request
+from oxbrook import App, Request
 
 app = App()
 
@@ -41,7 +41,7 @@ make docs           # build into site/
 | [Topics](www/streams/topics.md) · [SSE](www/streams/sse.md) · [WebSocket](www/streams/websockets.md) · [Durable topics](www/streams/durable.md) | streaming |
 | [OpenAPI](www/openapi.md) · [Agents](www/agents.md) | generated interfaces |
 | [Running a server](www/running.md) | workers, backpressure, limits, containers |
-| [Why Aether is built this way](www/design/why.md) · [Internals](www/design/internals.md) · [Performance](www/design/performance.md) | design and measurements |
+| [Why Oxbrook is built this way](www/design/why.md) · [Internals](www/design/internals.md) · [Performance](www/design/performance.md) | design and measurements |
 
 The API reference is generated from the docstrings and needs the built site.
 
@@ -74,7 +74,7 @@ agent-callable until someone decides it should be.
 
 | hello world, free-threaded 3.14 | req/s |
 |---|---:|
-| aether | 181,397 |
+| oxbrook | 181,397 |
 | granian, raw ASGI | 135,846 |
 | granian + FastAPI | 29,674 |
 | uvicorn + FastAPI | 12,411 |
@@ -89,7 +89,7 @@ of each feature, and what has not been measured.
 ## Build
 
 Requires Rust, [uv](https://docs.astral.sh/uv/), Docker for services, and
-[oha](https://github.com/hatoo/oha) for benchmarks. Nothing Aether depends on
+[oha](https://github.com/hatoo/oha) for benchmarks. Nothing Oxbrook depends on
 is installed on the host.
 
 ```bash
@@ -117,7 +117,7 @@ container before trusting a green run.
 ## Layout
 
 ```
-src/            Rust crate, built as the aether._core extension module
+src/            Rust crate, built as the oxbrook._core extension module
   server.rs     tokio accept loop, hyper 1, HEAD/405/413, upgrade handshake
   router.rs     matchit radix tree per method, path and query coercion
   queue.rs      bounded per-worker queue + socketpair wakeup
@@ -125,7 +125,7 @@ src/            Rust crate, built as the aether._core extension module
   request.rs    frozen Request pyclass
   responder.rs  reply channel, streaming bodies, disconnect signal
   websocket.rs  tokio-tungstenite bridge
-python/aether/  App, routing, pydantic, OpenAPI, topics, SSE, sockets, runtime
+python/oxbrook/  App, routing, pydantic, OpenAPI, topics, SSE, sockets, runtime
 examples/       hello world, live feed, durable queue, agent service, cluster node
 bench/          hello-world, CPU-parallelism and handler-cost sweeps
 tests/          eighteen standalone scripts, each exiting non-zero on failure

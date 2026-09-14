@@ -1,13 +1,13 @@
 # Dependencies, sessions, logging, testing
 
-::: aether.Depends
+::: oxbrook.Depends
 
-::: aether.Sessions
+::: oxbrook.Sessions
 
-::: aether.Session
+::: oxbrook.Session
 
-::: aether.json_logging
+::: oxbrook.json_logging
 
-::: aether.JsonFormatter
+::: oxbrook.JsonFormatter
 
-::: aether.testing.TestClient
+::: oxbrook.testing.TestClient

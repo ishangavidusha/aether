@@ -1,4 +1,4 @@
-# Aether milestone-1 spike. Two venvs: .venv (free-threaded 3.14t) and .venv-gil (standard 3.14).
+# Oxbrook milestone-1 spike. Two venvs: .venv (free-threaded 3.14t) and .venv-gil (standard 3.14).
 FT_PY  := 3.14.7+freethreaded
 # Homebrew's 3.14 on this Mac, so its numbers stay comparable with every run
 # recorded before benchmarks ever left it. Anywhere else, uv fetches its own.
@@ -63,7 +63,7 @@ coverage: build-ft
 	@rm -f .coverage .coverage.[0-9]* 2>/dev/null || true
 	@for s in $(SUITES); do echo "== $$s"; \
 		COVERAGE_CORE=sysmon $(SUITE_TIMEOUT) .venv/bin/python -m coverage run --branch -p \
-			--source=python/aether tests/$$s.py || exit 1; \
+			--source=python/oxbrook tests/$$s.py || exit 1; \
 	done
 	@.venv/bin/python -m coverage combine -q
 	@.venv/bin/python -m coverage report --precision=1 --sort=cover \
@@ -91,12 +91,12 @@ coverage-rust:
 			.venv/bin/python tests/$$s.py >/dev/null 2>&1 || echo "suite failed: $$s"; \
 	done
 	@$(LLVM_BIN)/llvm-profdata merge -sparse target-cov/prof/*.profraw \
-		-o target-cov/aether.profdata
-	@$(LLVM_BIN)/llvm-cov report --instr-profile=target-cov/aether.profdata \
-		--object python/aether/_core.cpython-314t-darwin.so \
+		-o target-cov/oxbrook.profdata
+	@$(LLVM_BIN)/llvm-cov report --instr-profile=target-cov/oxbrook.profdata \
+		--object python/oxbrook/_core.cpython-314t-darwin.so \
 		--ignore-filename-regex='(/.cargo/|/rustc/|library/std)'
-	@$(LLVM_BIN)/llvm-cov show --instr-profile=target-cov/aether.profdata \
-		--object python/aether/_core.cpython-314t-darwin.so \
+	@$(LLVM_BIN)/llvm-cov show --instr-profile=target-cov/oxbrook.profdata \
+		--object python/oxbrook/_core.cpython-314t-darwin.so \
 		--format=html --output-dir=target-cov/html \
 		--ignore-filename-regex='(/.cargo/|/rustc/|library/std)'
 	@echo "html report: target-cov/html/index.html"
@@ -108,7 +108,7 @@ coverage-rust:
 lint:
 	cargo fmt --check
 	cargo clippy --all-targets -- -D warnings
-	.venv-gil/bin/python -m ruff check python/aether tests bench examples
+	.venv-gil/bin/python -m ruff check python/oxbrook tests bench examples
 
 # --- public documentation ---------------------------------------------------
 # Built from the GIL venv, which is where the docs tooling lives. mkdocstrings
@@ -221,11 +221,11 @@ logs:
 # Build the app image, and run a two-node stack against one Redis. This is the
 # only way to exercise cross-process fan-out the way it actually ships.
 image:
-	$(DOCKER) build --target runtime -t aether:dev .
+	$(DOCKER) build --target runtime -t oxbrook:dev .
 
 # The runtime image plus oha and bench/, for measuring inside Docker's network.
 image-bench:
-	$(DOCKER) build --target bench -t aether:bench .
+	$(DOCKER) build --target bench -t oxbrook:bench .
 
 stack: image
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.stack.yml up -d --wait

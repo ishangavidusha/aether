@@ -97,7 +97,7 @@ Free-threaded 3.14.7, 64 connections:
 
 | target | req/s | p50 ms | p99 ms |
 |---|---:|---:|---:|
-| Aether, 4 loops | 181,397 | 0.28 | 1.46 |
+| Oxbrook, 4 loops | 181,397 | 0.28 | 1.46 |
 | granian raw ASGI | 135,846 | 0.46 | 0.72 |
 | granian + FastAPI | 29,674 | 2.14 | 2.51 |
 | uvicorn raw ASGI, 10 workers | 66,474 | 0.65 | 4.61 |
@@ -114,7 +114,7 @@ loop:
 
 | target | req/s | p50 ms | p99 ms |
 |---|---:|---:|---:|
-| Aether, 1 loop | 192,054 | 0.33 | 0.54 |
+| Oxbrook, 1 loop | 192,054 | 0.33 | 0.54 |
 | granian raw ASGI | 128,733 | 0.50 | 0.78 |
 | granian + FastAPI | 35,238 | 1.79 | 2.20 |
 | uvicorn + FastAPI | 11,572 | 5.55 | 5.72 |

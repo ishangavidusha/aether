@@ -30,7 +30,7 @@ from typing import Any
 #: Set by the dependency, read by the middleware after the handler returns.
 #: They run in the same task, so the value set inside the dependency is visible
 #: to the middleware on the way back out.
-_current: ContextVar[Any] = ContextVar("aether_session")
+_current: ContextVar[Any] = ContextVar("oxbrook_session")
 
 DEFAULT_MAX_AGE = 14 * 24 * 3600
 
@@ -82,7 +82,7 @@ class Sessions:
         self,
         secret: str | bytes,
         *,
-        cookie: str = "aether_session",
+        cookie: str = "oxbrook_session",
         max_age: int = DEFAULT_MAX_AGE,
         secure: bool = True,
         same_site: str = "Lax",

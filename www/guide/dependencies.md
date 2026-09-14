@@ -4,7 +4,7 @@ A handler argument defaulted to `Depends(...)` is resolved before the handler
 runs.
 
 ```python
-from aether import Depends
+from oxbrook import Depends
 
 async def get_db(request):
     pool = request.state.pool           # this worker loop's pool

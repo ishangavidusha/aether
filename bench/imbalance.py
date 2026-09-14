@@ -112,7 +112,7 @@ def main():
         print("the GIL build runs one worker loop, so there is no assignment to measure")
         sys.exit(2)
 
-    env = {**os.environ, "PYTHONPATH": str(ROOT), "AETHER_SLOW_MS": str(args.slow_ms)}
+    env = {**os.environ, "PYTHONPATH": str(ROOT), "OXBROOK_SLOW_MS": str(args.slow_ms)}
     proc = subprocess.Popen(
         [py, "bench/imbalance_app.py", "--port", str(PORT), "--workers", str(args.workers)],
         cwd=ROOT, env=env, start_new_session=True,

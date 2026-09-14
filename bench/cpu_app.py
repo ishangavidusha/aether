@@ -1,4 +1,4 @@
-"""Aether app with a deliberately CPU-bound handler.
+"""Oxbrook app with a deliberately CPU-bound handler.
 
 Hello-world benchmarks measure dispatch. This one measures whether Python
 handler *execution* runs in parallel across worker loops, which is the whole
@@ -6,7 +6,7 @@ argument for targeting free-threaded CPython.
 """
 import argparse
 
-from aether import App, Request
+from oxbrook import App, Request
 
 app = App()
 ITERATIONS = 20_000

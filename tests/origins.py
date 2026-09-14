@@ -21,8 +21,8 @@ import sys
 import threading
 import time
 
-from aether import CORS, App, HTTPError
-from aether.testing import TestClient
+from oxbrook import CORS, App, HTTPError
+from oxbrook.testing import TestClient
 
 FRONTEND = "https://app.example.com"
 EVIL = "https://evil.example"

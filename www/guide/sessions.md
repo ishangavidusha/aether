@@ -4,7 +4,7 @@ A session is a dict in a signed cookie.
 
 ```python
 import os
-from aether import App, Depends, Request, Sessions
+from oxbrook import App, Depends, Request, Sessions
 
 sessions = Sessions(secret=os.environ["SECRET_KEY"])
 
@@ -44,7 +44,7 @@ a stale cookie should get a fresh session, not a `400`.
 ```python
 Sessions(
     secret=os.environ["SECRET_KEY"],
-    cookie="aether_session",
+    cookie="oxbrook_session",
     max_age=1209600,      # two weeks
     secure=True,          # HTTPS only
     same_site="Lax",

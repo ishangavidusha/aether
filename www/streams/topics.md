@@ -18,7 +18,7 @@ object, whichever worker loop asks.
 
 ## Every worker loop sees every message
 
-This is the whole reason Aether targets free-threaded Python.
+This is the whole reason Oxbrook targets free-threaded Python.
 
 The server runs several event loops in one process. Clients land on whichever
 loop happened to take their request, so two subscribers to the same feed are
@@ -71,7 +71,7 @@ is the topic's policy, overridable per subscription:
 | `error` | raise `TopicFull` at the producer |
 
 ```python
-from aether import BLOCK, DROP_NEWEST
+from oxbrook import BLOCK, DROP_NEWEST
 
 app.topic("orders", maxsize=4096, policy=BLOCK)     # at creation
 topic.subscribe(maxsize=16, policy=DROP_NEWEST)     # for one subscriber

@@ -1,4 +1,4 @@
-# Aether in a container.
+# Oxbrook in a container.
 #
 # The official Python images have no free-threaded interpreter, so uv installs
 # 3.14t here exactly as it does on a development machine. That keeps the
@@ -43,7 +43,7 @@ COPY examples ./examples
 # Anything that binds only to loopback is unreachable from outside the
 # container, so apps here must listen on 0.0.0.0.
 EXPOSE 8000
-CMD ["python", "-c", "import aether, sys; print('aether ready on', sys.version)"]
+CMD ["python", "-c", "import oxbrook, sys; print('oxbrook ready on', sys.version)"]
 
 # ---------- benchmark image ----------
 # The runtime plus a load generator and the bench scripts, for measuring inside

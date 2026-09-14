@@ -1,4 +1,4 @@
-# Why Aether is built this way
+# Why Oxbrook is built this way
 
 Each decision below was settled by a benchmark or by a test, several of them
 against the expected outcome. The approaches that were tried and replaced are

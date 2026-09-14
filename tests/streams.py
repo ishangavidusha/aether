@@ -4,7 +4,7 @@ import asyncio
 import sys
 import threading
 
-from aether import BLOCK, DROP_NEWEST, DROP_OLDEST, ERROR, Topic, TopicFull
+from oxbrook import BLOCK, DROP_NEWEST, DROP_OLDEST, ERROR, Topic, TopicFull
 
 failures: list[str] = []
 
@@ -132,7 +132,7 @@ async def context_manager():
 def cross_loop():
     """The M3 premise: subscribers on different event loops all receive.
 
-    Each thread runs its own loop, exactly as Aether's worker loops do.
+    Each thread runs its own loop, exactly as Oxbrook's worker loops do.
     """
     topic = Topic("cross")
     received: dict[int, list] = {}

@@ -1,16 +1,16 @@
-"""Aether app whose handler burns a configurable amount of CPU.
+"""Oxbrook app whose handler burns a configurable amount of CPU.
 
-`AETHER_SWEEP_ITERS` sets the loop length. Zero means the handler does nothing
+`OXBROOK_SWEEP_ITERS` sets the loop length. Zero means the handler does nothing
 but return, which is the hello-world case. This is the knob the worker-count
 sweep turns.
 """
 import argparse
 import os
 
-from aether import App, Request
+from oxbrook import App, Request
 
 app = App()
-ITERS = int(os.environ.get("AETHER_SWEEP_ITERS", "0"))
+ITERS = int(os.environ.get("OXBROOK_SWEEP_ITERS", "0"))
 
 
 @app.get("/work")

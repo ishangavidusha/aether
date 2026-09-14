@@ -19,7 +19,7 @@
     async def users(request):
         return await request.state.db.fetch("select ...")
 
-**Why there are two.** Aether runs one asyncio loop per worker thread, all in
+**Why there are two.** Oxbrook runs one asyncio loop per worker thread, all in
 one process. An asyncio connection pool, an `httpx.AsyncClient` or a Redis
 client belongs to the loop that created it and cannot be used from another. A
 single startup hook would build one pool usable by one loop out of several, and

@@ -1,6 +1,6 @@
 # Install
 
-Aether is not published to PyPI. Build it from the repository.
+Oxbrook is not published to PyPI. Build it from the repository.
 
 ## Requirements
 
@@ -19,7 +19,7 @@ make build     # maturin develop --release into both
 make run       # examples/hello.py
 ```
 
-`make build` compiles the Rust crate into `aether._core` and installs the
+`make build` compiles the Rust crate into `oxbrook._core` and installs the
 package into both environments. Rebuild after any change to `src/`; the `make`
 targets that need it already do.
 
@@ -32,7 +32,7 @@ maturin develop --release
 ## First app
 
 ```python
-from aether import App, Request
+from oxbrook import App, Request
 
 app = App(title="Notes", version="1.0.0")
 

@@ -28,8 +28,8 @@ import asyncio
 import sys
 
 import websockets
-from aether import App, Depends, HTTPError, Reply, Request, RequestValidationError, Router
-from aether.testing import TestClient
+from oxbrook import App, Depends, HTTPError, Reply, Request, RequestValidationError, Router
+from oxbrook.testing import TestClient
 from pydantic import BaseModel
 
 failures: list[str] = []

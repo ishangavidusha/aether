@@ -9,7 +9,7 @@ The trade-off, taken deliberately: unlike path parameters, body validation runs
 on the worker thread rather than the tokio thread, so a bad body does wake a
 Python worker before it is rejected.
 
-Aether still imports and runs without pydantic. Only body models need it.
+Oxbrook still imports and runs without pydantic. Only body models need it.
 """
 
 from typing import Any

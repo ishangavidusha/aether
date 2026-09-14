@@ -1,4 +1,4 @@
-"""Aether app for bench/streams.py: one topic fanned out over SSE, and an echo socket.
+"""Oxbrook app for bench/streams.py: one topic fanned out over SSE, and an echo socket.
 
 The topic blocks rather than drops, so a publish only finishes when every
 subscriber has taken every event. That makes elapsed time a lossless delivery
@@ -7,7 +7,7 @@ rate instead of a count of how much was thrown away.
 import argparse
 import time
 
-from aether import SSE, App, Request
+from oxbrook import SSE, App, Request
 
 app = App(openapi_url=None, docs_url=None, mcp_url=None)
 ticks = app.topic("ticks", maxsize=1024, policy="block")

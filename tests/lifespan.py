@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Startup and shutdown around a server's life.
 
-Aether runs one asyncio loop per worker thread. Something bound to a loop — a
+Oxbrook runs one asyncio loop per worker thread. Something bound to a loop — a
 connection pool, an async HTTP client — cannot be shared between them, so there
 are two hooks: `lifespan` once for the process, and `worker_lifespan` on every
 loop. These cases hold each part of that to account:
@@ -22,8 +22,8 @@ import threading
 import time
 from contextlib import asynccontextmanager
 
-from aether import App, Request
-from aether.testing import TestClient
+from oxbrook import App, Request
+from oxbrook.testing import TestClient
 
 WORKERS = 3
 failures: list[str] = []

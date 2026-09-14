@@ -3,7 +3,7 @@
 ## Raising an HTTP error
 
 ```python
-from aether import HTTPError
+from oxbrook import HTTPError
 
 @app.get("/users/{user_id}")
 async def get_user(_: Request, user_id: int):
@@ -53,7 +53,7 @@ Register a handler for `HTTPError` to change the shape of every HTTP error, or
 for `RequestValidationError` to change the shape of a `422`:
 
 ```python
-from aether import RequestValidationError
+from oxbrook import RequestValidationError
 
 @app.exception_handler(RequestValidationError)
 async def invalid(request, exc):

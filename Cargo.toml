@@ -1,8 +1,8 @@
 [package]
-name = "aether-core"
+name = "oxbrook-core"
 version = "0.0.1"
 edition = "2021"
-description = "Rust runtime for the Aether Python framework (milestone-1 spike)"
+description = "Rust runtime for the Oxbrook Python framework (milestone-1 spike)"
 
 [lib]
 name = "_core"

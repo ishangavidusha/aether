@@ -5,9 +5,9 @@ import json
 import logging
 import sys
 
-from aether import App, Depends, Request, Sessions
-from aether._logging import JsonFormatter
-from aether.testing import TestClient
+from oxbrook import App, Depends, Request, Sessions
+from oxbrook._logging import JsonFormatter
+from oxbrook.testing import TestClient
 
 failures: list[str] = []
 
@@ -110,7 +110,7 @@ def sessions_round_trip() -> None:
         )
 
         # A forged or edited cookie must be treated as no session at all.
-        c.http.cookies.set("aether_session", "ZmFrZQ.bm90LWEtc2lnbmF0dXJl", domain="127.0.0.1")
+        c.http.cookies.set("oxbrook_session", "ZmFrZQ.bm90LWEtc2lnbmF0dXJl", domain="127.0.0.1")
         check(c.get("/peek").json() == {"n": 0}, "a forged session cookie was trusted")
 
 
@@ -131,7 +131,7 @@ def logging_output() -> None:
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
     handler.setFormatter(JsonFormatter())
-    root = logging.getLogger("aether")
+    root = logging.getLogger("oxbrook")
     previous, previous_level = root.handlers[:], root.level
     root.handlers[:] = [handler]
     root.setLevel(logging.INFO)
@@ -157,7 +157,7 @@ def logging_output() -> None:
 
     lines = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
     check(bool(lines), "nothing was logged")
-    access = [line for line in lines if line["logger"] == "aether.access"]
+    access = [line for line in lines if line["logger"] == "oxbrook.access"]
     check(len(access) == 2, f"expected 2 access lines, got {len(access)}")
     check(
         access[0]["status"] == 200 and access[0]["path"] == "/ok",

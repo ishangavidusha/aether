@@ -2,7 +2,7 @@
 //!
 //! A tokio task owns the socket and does the framing; the handler runs on a
 //! Python worker loop. The two are bridged by a queue in each direction, with
-//! the same rule as everywhere else in Aether: Python is only touched when it
+//! the same rule as everywhere else in Oxbrook: Python is only touched when it
 //! is actually idle and needs waking, never once per message on a busy socket.
 
 use std::collections::VecDeque;
@@ -105,7 +105,7 @@ impl Shared {
 }
 
 /// The handler's view of a live connection.
-#[pyclass(frozen, name = "WebSocket", module = "aether._core")]
+#[pyclass(frozen, name = "WebSocket", module = "oxbrook._core")]
 pub struct WebSocket {
     shared: Arc<Shared>,
 }

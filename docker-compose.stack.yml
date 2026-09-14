@@ -1,4 +1,4 @@
-# A two-node Aether stack, layered on top of docker-compose.yml.
+# A two-node Oxbrook stack, layered on top of docker-compose.yml.
 #
 #   make stack        build the image and bring both nodes up
 #   make stack-down   tear it down
@@ -10,14 +10,14 @@
 
 services:
   node-a:
-    image: aether:dev
-    container_name: aether-node-a
+    image: oxbrook:dev
+    container_name: oxbrook-node-a
     depends_on:
       redis:
         condition: service_healthy
     environment:
-      AETHER_REDIS: redis://redis:6379
-      AETHER_NODE: node-a
+      OXBROOK_REDIS: redis://redis:6379
+      OXBROOK_NODE: node-a
     command: ["python", "examples/cluster_node.py"]
     ports:
       - "127.0.0.1:8001:8000"
@@ -29,14 +29,14 @@ services:
       start_period: 3s
 
   node-b:
-    image: aether:dev
-    container_name: aether-node-b
+    image: oxbrook:dev
+    container_name: oxbrook-node-b
     depends_on:
       redis:
         condition: service_healthy
     environment:
-      AETHER_REDIS: redis://redis:6379
-      AETHER_NODE: node-b
+      OXBROOK_REDIS: redis://redis:6379
+      OXBROOK_NODE: node-b
     command: ["python", "examples/cluster_node.py"]
     ports:
       - "127.0.0.1:8002:8000"

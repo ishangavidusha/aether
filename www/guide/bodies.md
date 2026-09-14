@@ -41,13 +41,13 @@ client parses one format for every `422`, wherever it came from.
 ```
 
 Body validation runs on the worker thread, not in Rust. It is the one place
-Aether wakes Python before rejecting bad input, because pydantic is the
+Oxbrook wakes Python before rejecting bad input, because pydantic is the
 validator and pydantic is Python. It costs about 13% against hello world:
 
-| target | req/s | vs Aether |
+| target | req/s | vs Oxbrook |
 |---|---:|---:|
-| Aether, hello world | 184,861 | 1.0x |
-| Aether, validated POST | 158,031 | 1.2x |
+| Oxbrook, hello world | 184,861 | 1.0x |
+| Oxbrook, validated POST | 158,031 | 1.2x |
 | granian + FastAPI, validated POST | 17,023 | 10.9x |
 | uvicorn + FastAPI, validated POST | 9,948 | 18.6x |
 
@@ -68,7 +68,7 @@ async def webhook(request: Request):
 
 ## pydantic is optional
 
-Aether imports and runs without pydantic installed. Only body models and model
+Oxbrook imports and runs without pydantic installed. Only body models and model
 responses need it. Everything else — routing, parameters, topics, sockets — is
 plain Python and Rust.
 

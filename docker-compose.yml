@@ -1,6 +1,6 @@
-# Development services for Aether.
+# Development services for Oxbrook.
 #
-# Everything Aether talks to runs in a container, so nothing has to be
+# Everything Oxbrook talks to runs in a container, so nothing has to be
 # installed on the host. Start with `make up`.
 #
 #   redis   backing store for durable topics (milestone 4)
@@ -8,12 +8,12 @@
 # Ports are deliberately non-default (6399, not 6379) so this never collides
 # with anything already running on the machine.
 
-name: aether-dev
+name: oxbrook-dev
 
 services:
   redis:
     image: redis:8-alpine
-    container_name: aether-redis
+    container_name: oxbrook-redis
     command: >
       redis-server
       --save ""

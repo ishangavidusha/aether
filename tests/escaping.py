@@ -23,8 +23,8 @@ import sys
 import threading
 import time
 
-from aether import SSE, App, Event, Request, Response
-from aether.testing import free_port
+from oxbrook import SSE, App, Event, Request, Response
+from oxbrook.testing import free_port
 
 failures: list[str] = []
 

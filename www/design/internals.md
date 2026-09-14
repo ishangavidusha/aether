@@ -7,7 +7,7 @@ workload.
 ## Layout
 
 ```
-src/            Rust crate, built as the aether._core extension module
+src/            Rust crate, built as the oxbrook._core extension module
   server.rs     tokio accept loop, hyper 1, HEAD/405/413, upgrade handshake
   router.rs     matchit radix tree per method, path and query coercion
   queue.rs      bounded per-worker queue + socketpair wakeup
@@ -15,7 +15,7 @@ src/            Rust crate, built as the aether._core extension module
   request.rs    the frozen Request handed to handlers
   responder.rs  reply channel, streaming bodies, client-disconnect signal
   websocket.rs  tokio-tungstenite bridge
-python/aether/  App, routing, pydantic, OpenAPI, topics, SSE, sockets, runtime
+python/oxbrook/  App, routing, pydantic, OpenAPI, topics, SSE, sockets, runtime
 ```
 
 ## The request path

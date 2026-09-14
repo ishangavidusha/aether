@@ -1,29 +1,29 @@
 # Topics and streaming
 
-::: aether._streams.Topic
+::: oxbrook._streams.Topic
 
-::: aether._streams.Subscription
+::: oxbrook._streams.Subscription
 
-::: aether.TopicFull
+::: oxbrook.TopicFull
 
 ## Backpressure policies
 
-::: aether._streams.DROP_OLDEST
+::: oxbrook._streams.DROP_OLDEST
 
-::: aether._streams.DROP_NEWEST
+::: oxbrook._streams.DROP_NEWEST
 
-::: aether._streams.BLOCK
+::: oxbrook._streams.BLOCK
 
-::: aether._streams.ERROR
+::: oxbrook._streams.ERROR
 
 ## Server-Sent Events
 
-::: aether.SSE
+::: oxbrook.SSE
 
-::: aether.Event
+::: oxbrook.Event
 
 ## WebSocket
 
-::: aether.WebSocket
+::: oxbrook.WebSocket
 
-::: aether.WebSocketClosed
+::: oxbrook.WebSocketClosed

@@ -13,7 +13,7 @@ async def place(_: Request, body: Order):
     return {"ok": True}
 ```
 
-Redis is optional. Aether imports and runs without it; only durable topics need
+Redis is optional. Oxbrook imports and runs without it; only durable topics need
 it. Run it in a container:
 
 ```bash

@@ -1,19 +1,19 @@
 # Requests and responses
 
-::: aether.Request
+::: oxbrook.Request
     options:
       force_inspection: true
 
-::: aether.Response
+::: oxbrook.Response
 
-::: aether.Reply
+::: oxbrook.Reply
 
-::: aether.FormData
+::: oxbrook.FormData
 
-::: aether.UploadFile
+::: oxbrook.UploadFile
 
-::: aether.Form
+::: oxbrook.Form
 
-::: aether.BodyStream
+::: oxbrook.BodyStream
 
-::: aether.CORS
+::: oxbrook.CORS

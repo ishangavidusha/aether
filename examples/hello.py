@@ -1,12 +1,12 @@
-"""Aether basics: routes, typed parameters, validated bodies, and OpenAPI.
+"""Oxbrook basics: routes, typed parameters, validated bodies, and OpenAPI.
 
 Run it, then open http://127.0.0.1:8000/docs
 """
 
-from aether import App, Request, Response
+from oxbrook import App, Request, Response
 from pydantic import BaseModel, Field
 
-app = App(title="Aether Example", version="0.1.0")
+app = App(title="Oxbrook Example", version="0.1.0")
 
 
 @app.get("/")

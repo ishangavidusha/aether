@@ -26,7 +26,7 @@ _SCALAR_SCHEMA: dict[Any, dict[str, str]] = {
 
 _REF_TEMPLATE = "#/components/schemas/{model}"
 
-# `/files/{*rest}` in Aether is `/files/{rest}` in OpenAPI, which has no
+# `/files/{*rest}` in Oxbrook is `/files/{rest}` in OpenAPI, which has no
 # wildcard syntax of its own.
 _WILDCARD = re.compile(r"\{\*([A-Za-z_][A-Za-z0-9_]*)\}")
 

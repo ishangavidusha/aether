@@ -1,7 +1,7 @@
 # Testing
 
 ```python
-from aether.testing import TestClient
+from oxbrook.testing import TestClient
 
 def test_users():
     with TestClient(app) as client:

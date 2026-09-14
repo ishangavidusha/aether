@@ -60,7 +60,7 @@ by `max_body`. For files larger than that, use a `BodyStream`.
 ## Binding a form to a model
 
 ```python
-from aether import Form, UploadFile
+from oxbrook import Form, UploadFile
 from pydantic import BaseModel
 
 class Signup(BaseModel):
@@ -96,7 +96,7 @@ the worker build: `request.form(max_parts=50)`, or `Form(max_parts=50)`.
 ## Streaming a body
 
 ```python
-from aether import BodyStream
+from oxbrook import BodyStream
 
 @app.put("/uploads/{name}")
 async def upload(request: Request, name: str, body: BodyStream):

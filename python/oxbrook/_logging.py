@@ -1,7 +1,7 @@
 """Logging.
 
-Everything Aether reports goes through the standard `logging` module, under the
-`aether` logger, so it lands wherever an application already sends its logs.
+Everything Oxbrook reports goes through the standard `logging` module, under the
+`oxbrook` logger, so it lands wherever an application already sends its logs.
 Nothing is written to stderr directly, so output from the framework obeys the
 application's own logging configuration.
 
@@ -10,7 +10,7 @@ application's own logging configuration.
 
 For machine-readable output:
 
-    from aether import json_logging
+    from oxbrook import json_logging
     json_logging()
 
 `access_log` on the app adds one line per request. It is opt-in because it is a
@@ -22,8 +22,8 @@ import logging
 import time
 from typing import Any
 
-logger = logging.getLogger("aether")
-access_logger = logging.getLogger("aether.access")
+logger = logging.getLogger("oxbrook")
+access_logger = logging.getLogger("oxbrook.access")
 
 #: Attributes `logging` puts on every record. Anything else was added by the
 #: caller and belongs in the JSON output.
@@ -53,10 +53,10 @@ class JsonFormatter(logging.Formatter):
 
 
 def json_logging(level: int = logging.INFO) -> None:
-    """Send Aether's logs to stderr as JSON lines."""
+    """Send Oxbrook's logs to stderr as JSON lines."""
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
-    root = logging.getLogger("aether")
+    root = logging.getLogger("oxbrook")
     root.handlers[:] = [handler]
     root.setLevel(level)
     root.propagate = False

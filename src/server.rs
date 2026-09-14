@@ -48,7 +48,7 @@ struct State {
     socket_origins: SocketOrigins,
 }
 
-#[pyclass(name = "Server", module = "aether._core")]
+#[pyclass(name = "Server", module = "oxbrook._core")]
 pub struct Server {
     host: String,
     port: u16,
@@ -66,7 +66,7 @@ pub struct Server {
     max_connections: usize,
     quiet: bool,
     routes: Vec<Route>,
-    /// `aether._lifecycle.Lifecycle`: runs the worker lifespan on each loop.
+    /// `oxbrook._lifecycle.Lifecycle`: runs the worker lifespan on each loop.
     lifecycle: Py<PyAny>,
     cors: Option<CorsTuple>,
     socket_origins: OriginsTuple,
@@ -259,7 +259,7 @@ impl Server {
         });
         if !drained {
             let busy: usize = shutdown.workers.iter().map(|w| w.queue.load()).sum();
-            eprintln!("aether: shutdown grace expired with {busy} request(s) still in flight");
+            eprintln!("oxbrook: shutdown grace expired with {busy} request(s) still in flight");
         }
 
         for w in &shutdown.workers {
@@ -277,7 +277,9 @@ impl Server {
             .filter(|w| !w.join(py, deadline))
             .count();
         if unfinished > 0 {
-            eprintln!("aether: {unfinished} worker(s) still tearing down after the shutdown grace");
+            eprintln!(
+                "oxbrook: {unfinished} worker(s) still tearing down after the shutdown grace"
+            );
         }
         drop(runtime);
 
@@ -296,7 +298,7 @@ async fn serve_loop(
         .await
         .map_err(|e| format!("bind {addr}: {e}"))?;
     if !quiet {
-        println!("Aether listening on http://{addr}");
+        println!("Oxbrook listening on http://{addr}");
     }
 
     // `max_concurrency` bounds requests handed to a worker, which is not the

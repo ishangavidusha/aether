@@ -66,7 +66,7 @@ def wait_port(proc, timeout=20.0):
 
 
 def measure(py, iters, workers, duration, conns):
-    env = {**os.environ, "PYTHONPATH": str(ROOT), "AETHER_SWEEP_ITERS": str(iters)}
+    env = {**os.environ, "PYTHONPATH": str(ROOT), "OXBROOK_SWEEP_ITERS": str(iters)}
     cmd = [py, "bench/sweep_app.py", "--port", str(PORT), "--workers", str(workers)]
     proc = subprocess.Popen(cmd, cwd=ROOT, env=env, start_new_session=True,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)

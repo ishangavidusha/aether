@@ -15,7 +15,7 @@ use std::collections::HashSet;
 
 use hyper::header::{HeaderMap, HOST, ORIGIN};
 
-/// (any origin, allowed origins) from `aether._app`.
+/// (any origin, allowed origins) from `oxbrook._app`.
 pub type OriginsTuple = (bool, Vec<String>);
 
 pub struct SocketOrigins {

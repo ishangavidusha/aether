@@ -25,8 +25,8 @@ import sys
 import time
 
 import httpx
-from aether import App, Depends, Request
-from aether.testing import TestClient, free_port
+from oxbrook import App, Depends, Request
+from oxbrook.testing import TestClient, free_port
 
 failures: list[str] = []
 

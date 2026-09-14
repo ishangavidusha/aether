@@ -1,6 +1,6 @@
 # Contributing
 
-Aether is a personal project rather than a maintained product, so open an issue
+Oxbrook is a personal project rather than a maintained product, so open an issue
 before writing anything substantial — the answer may be that a change is out of
 scope, and that is cheaper to hear first.
 

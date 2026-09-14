@@ -24,8 +24,8 @@
 #     host is obvious before an hour is spent on it.
 set -euo pipefail
 
-REPO="${AETHER_REPO:-https://github.com/ishangavidusha/aether.git}"
-DIR="${AETHER_DIR:-$HOME/aether}"
+REPO="${OXBROOK_REPO:-https://github.com/ishangavidusha/oxbrook.git}"
+DIR="${OXBROOK_DIR:-$HOME/oxbrook}"
 FD_LIMIT=65536
 
 # A cloud instance usually logs you in as root, where sudo may not be installed
@@ -59,8 +59,8 @@ else
 fi
 
 # Descriptor limit, for this shell and for every future login.
-if ! grep -q "aether benchmark" /etc/security/limits.conf 2>/dev/null; then
-    printf '# aether benchmark\n* soft nofile %s\n* hard nofile %s\n' "$FD_LIMIT" "$FD_LIMIT" \
+if ! grep -q "oxbrook benchmark" /etc/security/limits.conf 2>/dev/null; then
+    printf '# oxbrook benchmark\n* soft nofile %s\n* hard nofile %s\n' "$FD_LIMIT" "$FD_LIMIT" \
         | $SUDO tee -a /etc/security/limits.conf >/dev/null
 fi
 ulimit -n "$FD_LIMIT" 2>/dev/null || echo "could not raise nofile in this shell; log out and back in"
@@ -85,7 +85,7 @@ say "oha"
 # once and then never again.
 command -v oha >/dev/null || cargo install oha --locked
 
-say "aether"
+say "oxbrook"
 if [ ! -d "$DIR/.git" ]; then
     git clone "$REPO" "$DIR"
 fi

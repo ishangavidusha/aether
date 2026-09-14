@@ -1,13 +1,13 @@
 # Responses
 
-Return whatever the handler has. Aether decides how to send it.
+Return whatever the handler has. Oxbrook decides how to send it.
 
 | returned | sent as |
 |---|---|
 | `dict`, `list`, `str`, `int`, and friends | JSON, serialized in Rust |
 | a pydantic model | JSON, through pydantic's own serializer |
 | `None` | `204 No Content` |
-| [`Response`](../reference/http.md#aether.Response) | exactly what it says |
+| [`Response`](../reference/http.md#oxbrook.Response) | exactly what it says |
 | [`SSE`](../streams/sse.md) | a `text/event-stream` that stays open |
 
 ## Explicit responses
@@ -16,7 +16,7 @@ Return a `Response` when you need a specific status code, a content type that
 is not JSON, or bytes that are already encoded and should not be touched.
 
 ```python
-from aether import Response
+from oxbrook import Response
 
 @app.get("/teapot")
 async def teapot(_: Request):

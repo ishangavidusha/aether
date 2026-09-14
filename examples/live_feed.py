@@ -17,7 +17,7 @@ Run it, open http://127.0.0.1:8000/ in two or three browser tabs, and post:
 import asyncio
 import datetime
 
-from aether import SSE, App, Event, Request, Response
+from oxbrook import SSE, App, Event, Request, Response
 from pydantic import BaseModel, Field
 
 app = App(title="Live Feed", version="0.1.0")
@@ -53,7 +53,7 @@ async def ws_feed(_: Request, ws):
     """The same feed over a WebSocket.
 
     Note what is *not* here: no check for whether the browser is still
-    connected. When the socket closes, Aether cancels this handler, the `async
+    connected. When the socket closes, Oxbrook cancels this handler, the `async
     with` unwinds, and the subscription is released.
     """
     async with app.topic(FEED).subscribe(maxsize=64) as sub:

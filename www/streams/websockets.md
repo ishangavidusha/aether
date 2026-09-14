@@ -7,7 +7,7 @@ async def echo(request, ws):
         await ws.send(message)
 ```
 
-Aether performs the handshake, so the socket is already open when the handler
+Oxbrook performs the handshake, so the socket is already open when the handler
 runs, and the connection closes when the handler returns.
 
 The handler takes the request and the socket. Path and query parameters work

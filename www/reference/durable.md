@@ -1,7 +1,7 @@
 # Durable topics
 
-::: aether.RedisBackend
+::: oxbrook.RedisBackend
 
-::: aether.Consumer
+::: oxbrook.Consumer
 
-::: aether.Message
+::: oxbrook.Message

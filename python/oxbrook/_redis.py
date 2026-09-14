@@ -12,7 +12,7 @@ Adds three things an in-memory topic cannot give you:
   and keeps it pending until acknowledged. A consumer that dies mid-message
   gets it again when it comes back, or another member claims it.
 
-Redis is optional. Aether imports and runs without it; only durable topics
+Redis is optional. Oxbrook imports and runs without it; only durable topics
 need it.
 """
 
@@ -231,12 +231,12 @@ class RedisBackend:
         self,
         url: str = DEFAULT_URL,
         *,
-        prefix: str = "aether:",
+        prefix: str = "oxbrook:",
         maxlen: int | None = DEFAULT_MAXLEN,
     ) -> None:
         if not HAVE_REDIS:
             raise RuntimeError(
-                "durable topics need the redis package: pip install 'aether[redis]'"
+                "durable topics need the redis package: pip install 'oxbrook[redis]'"
             )
         self.url = url
         self.prefix = prefix
@@ -254,7 +254,7 @@ class RedisBackend:
         """A client bound to the calling event loop.
 
         redis-py's async connections belong to the loop that opened them, and
-        Aether runs several worker loops, so each gets its own pool rather than
+        Oxbrook runs several worker loops, so each gets its own pool rather than
         sharing one that would break the moment a second loop touched it.
         """
         loop = asyncio.get_running_loop()

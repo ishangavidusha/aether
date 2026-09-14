@@ -41,9 +41,9 @@ DOCKER = os.environ.get("DOCKER") or (
     subprocess.run(["sh", "-c", "command -v docker"], capture_output=True, text=True).stdout.strip()
     or str(Path.home() / ".docker/bin/docker")
 )
-IMAGE = os.environ.get("AETHER_BENCH_IMAGE", "aether:bench")
-NETWORK = "aether-bench"
-SERVER = "aether-bench-server"
+IMAGE = os.environ.get("OXBROOK_BENCH_IMAGE", "oxbrook:bench")
+NETWORK = "oxbrook-bench"
+SERVER = "oxbrook-bench-server"
 NATIVE_PORT = 8781
 PUBLISHED_PORT = 8782
 
@@ -80,7 +80,7 @@ def wait_port(port: int, timeout: float = 30.0) -> bool:
 
 def native(args) -> dict:
     proc = subprocess.Popen(
-        [args.python, "bench/aether_app.py", "--port", str(NATIVE_PORT)],
+        [args.python, "bench/oxbrook_app.py", "--port", str(NATIVE_PORT)],
         cwd=ROOT, env={**os.environ, "PYTHONPATH": str(ROOT)}, start_new_session=True,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
@@ -108,7 +108,7 @@ def containerised(args, cpus: float | None, published: bool) -> dict:
         run += ["--cpus", str(cpus)]
     if published:
         run += ["-p", f"127.0.0.1:{PUBLISHED_PORT}:8000"]
-    run += [IMAGE, "python", "bench/aether_app.py", "--host", "0.0.0.0", "--port", "8000"]
+    run += [IMAGE, "python", "bench/oxbrook_app.py", "--host", "0.0.0.0", "--port", "8000"]
     docker(*run)
     try:
         deadline = time.time() + 30

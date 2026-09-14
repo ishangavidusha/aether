@@ -6,7 +6,7 @@ import threading
 
 import httpx
 import websockets
-from aether import App, Request, Response
+from oxbrook import App, Request, Response
 from pydantic import BaseModel
 
 PORT = 8805
@@ -264,7 +264,7 @@ async def message_size_cap() -> list[str]:
     application could change. Its own server, because the cap is set per
     server and the shared one deliberately runs with the default.
     """
-    from aether.testing import free_port
+    from oxbrook.testing import free_port
 
     bad: list[str] = []
     capped = App(openapi_url=None, docs_url=None, mcp_url=None)

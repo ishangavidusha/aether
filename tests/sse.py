@@ -11,7 +11,7 @@ import threading
 import time
 
 import httpx
-from aether import SSE, App, Event, Request
+from oxbrook import SSE, App, Event, Request
 from pydantic import BaseModel
 
 PORT = 8803

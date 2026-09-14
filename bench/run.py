@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Benchmark Aether against uvicorn / granian / FastAPI with `oha`.
+"""Benchmark Oxbrook against uvicorn / granian / FastAPI with `oha`.
 
     bench/run.py --python .venv/bin/python            # free-threaded
     bench/run.py --python .venv-gil/bin/python        # GIL build
-    bench/run.py --python .venv/bin/python aether uvicorn-raw
+    bench/run.py --python .venv/bin/python oxbrook uvicorn-raw
 
 Each target is started as a subprocess, warmed up, measured, and killed.
 Results are printed as a table and saved to bench/results/<name>.json.
@@ -37,18 +37,18 @@ def target_cmds(py: str, workers: int) -> dict[str, tuple[list[str], str, list[s
           "--log-level", "warning", "--loop", "asyncio", "--http", "h11"]
     gr = [py, "-m", "granian", "--host", "127.0.0.1", "--port", str(PORT),
           "--interface", "asgi", "--log-level", "warning"]
-    aether = [py, "bench/aether_app.py", "--port", str(PORT)]
+    oxbrook = [py, "bench/oxbrook_app.py", "--port", str(PORT)]
     fastapi_uv = uv + ["bench.fastapi_app:app"]
     fastapi_gr = gr + ["--workers", "1", "bench.fastapi_app:app"]
     return {
-        "aether":            (aether, "/", []),
-        "aether-1w":         (aether + ["--workers", "1"], "/", []),
-        "aether-2w":         (aether + ["--workers", "2"], "/", []),
-        "aether-4w":         (aether + ["--workers", "4"], "/", []),
-        "aether-8w":         (aether + ["--workers", "8"], "/", []),
-        "aether-param":      (aether, "/users/42", []),
-        "aether-body":       (aether, "/users", POST_JSON),
-        "aether-query":      (aether, "/search?q=abc&limit=5", []),
+        "oxbrook":            (oxbrook, "/", []),
+        "oxbrook-1w":         (oxbrook + ["--workers", "1"], "/", []),
+        "oxbrook-2w":         (oxbrook + ["--workers", "2"], "/", []),
+        "oxbrook-4w":         (oxbrook + ["--workers", "4"], "/", []),
+        "oxbrook-8w":         (oxbrook + ["--workers", "8"], "/", []),
+        "oxbrook-param":      (oxbrook, "/users/42", []),
+        "oxbrook-body":       (oxbrook, "/users", POST_JSON),
+        "oxbrook-query":      (oxbrook, "/search?q=abc&limit=5", []),
         "uvicorn-raw":       (uv + ["bench.asgi_raw:app"], "/", []),
         "uvicorn-raw-Nw":    (uv + ["--workers", str(workers), "bench.asgi_raw:app"], "/", []),
         "uvicorn-fastapi":   (fastapi_uv, "/", []),
@@ -67,7 +67,7 @@ def target_cmds(py: str, workers: int) -> dict[str, tuple[list[str], str, list[s
 def installed(py: str, module: str) -> bool:
     """Whether a comparison target can run at all on this interpreter.
 
-    A fresh machine has aether built and nothing else. Skipping a target with a
+    A fresh machine has oxbrook built and nothing else. Skipping a target with a
     reason beats twenty lines of tracebacks that all say the same thing.
     """
     return subprocess.run(
@@ -76,7 +76,7 @@ def installed(py: str, module: str) -> bool:
 
 
 def requirement(name: str) -> str | None:
-    """The import a target needs, or None when it only needs aether."""
+    """The import a target needs, or None when it only needs oxbrook."""
     for prefix, module in (("uvicorn", "uvicorn"), ("granian", "granian")):
         if name.startswith(prefix):
             return module

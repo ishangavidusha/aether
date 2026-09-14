@@ -1,4 +1,4 @@
-"""Aether: a fast Python web framework with a Rust core.
+"""Oxbrook: a fast Python web framework with a Rust core.
 
 Async handlers, a radix-tree router with typed path and query parameters
 coerced in Rust, pydantic request and response bodies, bounded concurrency,

@@ -14,10 +14,10 @@ import sys
 import threading
 
 import httpx
-from aether import App, Request
-from aether._mcp import SUPPORTED_VERSIONS
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from oxbrook import App, Request
+from oxbrook._mcp import SUPPORTED_VERSIONS
 from pydantic import BaseModel, Field
 
 PORT = 8811
@@ -225,7 +225,7 @@ def protocol_drift_check() -> None:
         False,
         f"the MCP SDK now names {LATEST_PROTOCOL_VERSION!r} as its latest, which the "
         f"server has never been tested at. Drive a real client at it: if it works, add "
-        f"it to SUPPORTED_VERSIONS in python/aether/_mcp.py; if clients do not yet "
+        f"it to SUPPORTED_VERSIONS in python/oxbrook/_mcp.py; if clients do not yet "
         f"negotiate it, bump ACKNOWLEDGED_SDK_LATEST here",
     )
 

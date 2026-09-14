@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Durable topics: persistence, cross-process fan-out, and at-least-once.
 
-Needs a Redis on AETHER_TEST_REDIS (default redis://127.0.0.1:6399). Prints
+Needs a Redis on OXBROOK_TEST_REDIS (default redis://127.0.0.1:6399). Prints
 SKIP and exits 0 if there is none, so the rest of the suite still runs; the
 gap is recorded as I-019 rather than hidden.
 """
@@ -12,11 +12,11 @@ import sys
 import textwrap
 import uuid
 
-from aether import App
-from aether._redis import HAVE_REDIS, Consumer, RedisBackend
+from oxbrook import App
+from oxbrook._redis import HAVE_REDIS, Consumer, RedisBackend
 
-URL = os.environ.get("AETHER_TEST_REDIS", "redis://127.0.0.1:6399")
-PREFIX = f"aethertest:{uuid.uuid4().hex[:8]}:"
+URL = os.environ.get("OXBROOK_TEST_REDIS", "redis://127.0.0.1:6399")
+PREFIX = f"oxbrooktest:{uuid.uuid4().hex[:8]}:"
 
 failures: list[str] = []
 
@@ -67,7 +67,7 @@ async def cross_node():
     publisher = RedisBackend(URL, prefix=PREFIX)
     listener = RedisBackend(URL, prefix=PREFIX)
 
-    from aether._streams import Topic
+    from oxbrook._streams import Topic
 
     remote = Topic("bus", backend=listener)
     sub = remote.subscribe()
@@ -84,7 +84,7 @@ async def cross_node():
 
 async def separate_process():
     """The actual claim: another OS process publishes, we receive."""
-    from aether._streams import Topic
+    from oxbrook._streams import Topic
 
     backend = RedisBackend(URL, prefix=PREFIX)
     topic = Topic("interproc", backend=backend)
@@ -94,7 +94,7 @@ async def separate_process():
     script = textwrap.dedent(f"""
         import asyncio, sys
         sys.path.insert(0, {os.getcwd()!r} + "/python")
-        from aether._redis import RedisBackend
+        from oxbrook._redis import RedisBackend
 
         async def main():
             b = RedisBackend({URL!r}, prefix={PREFIX!r})
@@ -205,7 +205,7 @@ async def survives_a_dropped_connection():
     deaf to every other node with nothing to show for it: local delivery would
     still work, so it would look fine until a message failed to arrive.
     """
-    from aether._streams import Topic
+    from oxbrook._streams import Topic
 
     listener = RedisBackend(URL, prefix=PREFIX)
     publisher = RedisBackend(URL, prefix=PREFIX)
@@ -234,7 +234,7 @@ async def survives_a_dropped_connection():
 
 
 async def refusals():
-    from aether._streams import Topic
+    from oxbrook._streams import Topic
 
     backend = RedisBackend(URL, prefix=PREFIX)
     durable = Topic("refuse", backend=backend)
@@ -287,11 +287,11 @@ def main() -> None:
     if not asyncio.run(reachable()):
         why = "redis package not installed" if not HAVE_REDIS else f"no redis at {URL}"
         print(f"redis: unavailable ({why})")
-        # CI sets AETHER_REQUIRE_REDIS. A suite that passes without testing
+        # CI sets OXBROOK_REQUIRE_REDIS. A suite that passes without testing
         # anything is worse than one that fails, and this is the only suite
         # covering milestone 4.
-        if os.environ.get("AETHER_REQUIRE_REDIS"):
-            print("\nRESULT: FAIL (AETHER_REQUIRE_REDIS is set and redis is unreachable)")
+        if os.environ.get("OXBROOK_REQUIRE_REDIS"):
+            print("\nRESULT: FAIL (OXBROOK_REQUIRE_REDIS is set and redis is unreachable)")
             sys.exit(1)
         print("\nRESULT: SKIP")
         sys.exit(0)

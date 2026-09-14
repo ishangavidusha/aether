@@ -1,6 +1,6 @@
 # Server-Sent Events
 
-Return an `SSE` and Aether streams it as `text/event-stream`.
+Return an `SSE` and Oxbrook streams it as `text/event-stream`.
 
 ```python
 @app.get("/events")
@@ -30,7 +30,7 @@ pydantic model goes through pydantic's serializer.
 Yield an `Event` to set a name, an id for resumption, or a client retry hint:
 
 ```python
-from aether import Event
+from oxbrook import Event
 
 yield Event({"price": 42}, event="tick", id="1051", retry=3000)
 ```

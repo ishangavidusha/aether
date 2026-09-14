@@ -5,7 +5,7 @@ import sys
 import threading
 
 import httpx
-from aether import App, Request
+from oxbrook import App, Request
 from pydantic import BaseModel, Field
 
 PORT = 8801

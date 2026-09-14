@@ -15,8 +15,8 @@ any origin, which would let every website act as a signed-in user.
 """
 import sys
 
-from aether import CORS, App, Request, Response
-from aether.testing import TestClient
+from oxbrook import CORS, App, Request, Response
+from oxbrook.testing import TestClient
 
 GOOD = "https://app.example.com"
 EVIL = "https://evil.example"

@@ -36,7 +36,7 @@ The default is measured, not guessed:
 So the default is "how many cores can actually run Python in parallel", which
 is not `os.cpu_count()`: that counts efficiency cores, and inside a container it
 reports the host's cores rather than the cgroup quota — which would start
-dozens of loops for a two-CPU limit. Aether probes cgroup quotas, CPU affinity
+dozens of loops for a two-CPU limit. Oxbrook probes cgroup quotas, CPU affinity
 and performance-core counts, takes the most constrained answer, and caps it at
 8.
 
@@ -80,7 +80,7 @@ backlog where a client's own connect timeout governs it.
 
 ## In front of it
 
-Aether speaks HTTP/1.1 with no TLS and no HTTP/2. **Put a terminating proxy in
+Oxbrook speaks HTTP/1.1 with no TLS and no HTTP/2. **Put a terminating proxy in
 front of it** — nginx, Caddy, a cloud load balancer — and let that handle TLS,
 HTTP/2 and whatever else the edge needs.
 
@@ -105,7 +105,7 @@ explicitly keeps the container and the development machine on the same
 interpreter.
 
 ```bash
-make image     # build aether:dev
+make image     # build oxbrook:dev
 make stack     # two nodes against one redis
 make down      # stop everything
 ```

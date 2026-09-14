@@ -1,9 +1,9 @@
 # App
 
-::: aether.App
+::: oxbrook.App
 
-::: aether.Router
+::: oxbrook.Router
 
-::: aether.HTTPError
+::: oxbrook.HTTPError
 
-::: aether.RequestValidationError
+::: oxbrook.RequestValidationError

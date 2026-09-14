@@ -56,7 +56,7 @@ impl ChunkResult {
 
 /// One-shot channel back to the tokio task that owns the connection.
 /// The Python runtime calls `send` or `send_json` exactly once.
-#[pyclass(frozen, name = "Responder", module = "aether._core")]
+#[pyclass(frozen, name = "Responder", module = "oxbrook._core")]
 pub struct Responder {
     tx: Mutex<Option<oneshot::Sender<Reply>>>,
     /// Set once a streaming response has started.

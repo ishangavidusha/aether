@@ -7,7 +7,7 @@ use crate::form::{self, FormError, Part};
 /// Immutable view of an incoming HTTP request, handed to the Python handler.
 /// `frozen` means no Python-side mutation, so no locking is needed even on
 /// free-threaded builds.
-#[pyclass(frozen, name = "Request", module = "aether._core")]
+#[pyclass(frozen, name = "Request", module = "oxbrook._core")]
 pub struct Request {
     pub method: String,
     pub path: String,
@@ -184,7 +184,7 @@ impl Request {
 
         let error = |status: u16, detail: String| -> PyErr {
             match py
-                .import("aether._errors")
+                .import("oxbrook._errors")
                 .and_then(|m| m.getattr("HTTPError"))
                 .and_then(|cls| cls.call1((status, detail)))
             {
@@ -238,7 +238,7 @@ impl Request {
             };
             list.append(item)?;
         }
-        py.import("aether._forms")?
+        py.import("oxbrook._forms")?
             .getattr("FormData")?
             .call_method1("from_parts", (list,))
     }
@@ -255,7 +255,7 @@ impl Request {
             None => None,
         };
         let buffered = PyBytes::new(py, &self.body);
-        py.import("aether._bodies")?
+        py.import("oxbrook._bodies")?
             .getattr("BodyStream")?
             .call1((reader, buffered))
     }

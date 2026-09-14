@@ -45,7 +45,7 @@ DEFAULT_MAX_MESSAGE = 16 * 1024 * 1024
 class App:
     def __init__(
         self,
-        title: str = "Aether",
+        title: str = "Oxbrook",
         version: str = "0.1.0",
         description: str = "",
         openapi_url: str | None = "/openapi.json",
@@ -228,7 +228,7 @@ class App:
         sees the result, so the access log records the real status.
 
         Registering `HTTPError` or `RequestValidationError` replaces the
-        built-in response for it. See `aether.HTTPError`.
+        built-in response for it. See `oxbrook.HTTPError`.
         """
         if not (isinstance(exc_class, type) and issubclass(exc_class, Exception)):
             raise TypeError(
@@ -313,7 +313,7 @@ class App:
             async def feed(request, ws): ...
         
 
-        The handler takes the request and the socket. Aether performs the
+        The handler takes the request and the socket. Oxbrook performs the
         handshake, so the socket is already open when the handler runs, and the
         connection closes when it returns.
 
@@ -507,7 +507,7 @@ class App:
         mode = "GIL" if gil_enabled() else "free-threaded"
         if announce:
             print(
-                f"Aether: {workers} worker loop(s), max {max_concurrency} concurrent/worker, "
+                f"Oxbrook: {workers} worker loop(s), max {max_concurrency} concurrent/worker, "
                 f"{mode} Python {sys.version_info.major}.{sys.version_info.minor}"
                 f"{', debug' if self.debug else ''}",
                 flush=True,

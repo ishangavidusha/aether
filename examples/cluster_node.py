@@ -1,4 +1,4 @@
-"""One node of a multi-process Aether cluster. See docker-compose.stack.yml.
+"""One node of a multi-process Oxbrook cluster. See docker-compose.stack.yml.
 
 Every node subscribes to the same durable topic. Publish to any node and all
 of them deliver it, because the topic is backed by a Redis stream and each
@@ -12,14 +12,14 @@ node tails it. This is the claim that a single-process test cannot make.
 import asyncio
 import os
 
-from aether import SSE, App, Request
+from oxbrook import SSE, App, Request
 from pydantic import BaseModel, Field
 
-NODE = os.environ.get("AETHER_NODE", "node")
-REDIS = os.environ.get("AETHER_REDIS", "redis://127.0.0.1:6399")
+NODE = os.environ.get("OXBROOK_NODE", "node")
+REDIS = os.environ.get("OXBROOK_REDIS", "redis://127.0.0.1:6399")
 TOPIC = "cluster"
 
-app = App(title=f"Aether {NODE}", version="0.1.0", redis_url=REDIS)
+app = App(title=f"Oxbrook {NODE}", version="0.1.0", redis_url=REDIS)
 
 seen: list[dict] = []
 _collector: asyncio.Task | None = None

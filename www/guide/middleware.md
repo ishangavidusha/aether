@@ -3,14 +3,14 @@
 Middleware runs around every HTTP handler.
 
 ```python
-from aether import Reply
+from oxbrook import Reply
 
 @app.middleware
 async def require_key(request, call_next):
     if request.header("x-api-key") != SECRET:
         return Reply({"error": "unauthorized"}, status=401)
     reply = await call_next(request)
-    reply.headers["x-served-by"] = "aether"
+    reply.headers["x-served-by"] = "oxbrook"
     return reply
 ```
 
@@ -20,7 +20,7 @@ call the handler at all.
 
 ## `call_next` returns a Reply, not a response
 
-A [`Reply`](../reference/http.md#aether.Reply) holds whatever the handler
+A [`Reply`](../reference/http.md#oxbrook.Reply) holds whatever the handler
 returned, still unserialized: a dict, a model, a `Response`, an `SSE`, or
 `None`. It is not a finished body.
 

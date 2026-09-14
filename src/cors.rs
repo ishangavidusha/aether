@@ -18,7 +18,7 @@ use hyper::header::{
 use hyper::Method;
 
 /// (origins, methods, headers, allow_credentials, expose_headers, max_age)
-/// as built by `aether._cors.CORS`. `"*"` in a list means any.
+/// as built by `oxbrook._cors.CORS`. `"*"` in a list means any.
 pub type CorsTuple = (
     Vec<String>,
     Vec<String>,

@@ -9,8 +9,8 @@ import sys
 import threading
 import time
 
-from aether import App, Reply, Request, Response
-from aether.testing import TestClient
+from oxbrook import App, Reply, Request, Response
+from oxbrook.testing import TestClient
 
 failures: list[str] = []
 
@@ -155,7 +155,7 @@ def request_timeout() -> None:
 
 def timeout_does_not_cut_streams() -> None:
     """SSE holds a connection open far longer than the timeout on purpose."""
-    from aether import SSE
+    from oxbrook import SSE
 
     app = App(openapi_url=None, docs_url=None, mcp_url=None)
 
@@ -183,7 +183,7 @@ def streams_release_their_slot() -> None:
     that means a server refusing traffic it has capacity for, and a shutdown
     that cannot drain. The slot is now released explicitly.
     """
-    from aether import SSE
+    from oxbrook import SSE
 
     app = App(openapi_url=None, docs_url=None, mcp_url=None)
 
@@ -234,7 +234,7 @@ def abandoned_stream_does_not_wedge_shutdown() -> None:
     the path is exercised on both builds, and that shutdown after an abandoned
     stream still returns promptly.
     """
-    from aether import SSE
+    from oxbrook import SSE
 
     app = App(openapi_url=None, docs_url=None, mcp_url=None)
 
@@ -375,7 +375,7 @@ def connection_cap() -> None:
 
 # --------------------------------------------------------------------------
 def test_client_transports() -> None:
-    from aether import SSE
+    from oxbrook import SSE
 
     app = App(title="T", version="1.0")
 

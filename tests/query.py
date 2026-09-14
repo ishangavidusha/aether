@@ -6,7 +6,7 @@ import threading
 import uuid
 
 import httpx
-from aether import App, Request
+from oxbrook import App, Request
 
 PORT = 8799
 BASE = f"http://127.0.0.1:{PORT}"

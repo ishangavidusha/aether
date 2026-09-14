@@ -1,4 +1,4 @@
-//! Aether core: a tokio + hyper HTTP server that dispatches requests into a pool
+//! Oxbrook core: a tokio + hyper HTTP server that dispatches requests into a pool
 //! of Python asyncio event loops (one per worker thread).
 //!
 //! Dispatch is queue-based: tokio threads never attach to the interpreter. They

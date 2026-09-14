@@ -32,9 +32,9 @@ import socket
 import sys
 import time
 
-from aether import App, BodyStream, Form, HTTPError, Request, UploadFile
-from aether.testing import TestClient
 from openapi_spec_validator import validate
+from oxbrook import App, BodyStream, Form, HTTPError, Request, UploadFile
+from oxbrook.testing import TestClient
 from pydantic import BaseModel
 
 MB = 1024 * 1024

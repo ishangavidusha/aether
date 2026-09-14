@@ -1,7 +1,7 @@
-"""Aether hello-world with CLI args, used by bench/run.py."""
+"""Oxbrook hello-world with CLI args, used by bench/run.py."""
 import argparse
 
-from aether import App, Request
+from oxbrook import App, Request
 from pydantic import BaseModel
 
 app = App()

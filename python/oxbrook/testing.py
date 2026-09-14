@@ -1,6 +1,6 @@
 """A test client.
 
-    from aether.testing import TestClient
+    from oxbrook.testing import TestClient
 
     with TestClient(app) as client:
         response = client.get("/users/1")

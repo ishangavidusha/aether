@@ -1,10 +1,10 @@
-# Aether
+# Oxbrook
 
 A fast Python REST framework with a Rust core, built-in reactive streams, and
 agent-native interfaces.
 
 ```python
-from aether import App, Request
+from oxbrook import App, Request
 
 app = App()
 
@@ -17,7 +17,7 @@ app.run(port=8000)
 
 !!! warning "Not a supported product"
 
-    Aether is a personal project. Every feature documented here works and is
+    Oxbrook is a personal project. Every feature documented here works and is
     covered by the test suite on both CPython builds, but nothing is
     API-stable and there is no deprecation policy. Expect the API to change.
 
@@ -51,7 +51,7 @@ woken once per burst rather than once per request.
 
 | hello world, free-threaded 3.14 | req/s |
 |---|---:|
-| Aether | 181,397 |
+| Oxbrook | 181,397 |
 | granian, raw ASGI | 135,846 |
 | granian + FastAPI | 29,674 |
 | uvicorn + FastAPI | 12,411 |
@@ -59,7 +59,7 @@ woken once per burst rather than once per request.
 Apple Silicon, 10 cores. The [performance page](design/performance.md) has the
 method, the machine, and the caveats — including that hello world measures
 dispatch rather than a framework, and that the FastAPI rows were taken in an
-earlier run than the Aether one.
+earlier run than the Oxbrook one.
 
 Free-threaded CPython is the primary target, and not only for throughput: it is
 what lets several event loops share one process, which is what makes an
@@ -74,4 +74,4 @@ a single worker loop.
   more than one module, with resources that live as long as the server.
 - [Topics](streams/topics.md) — fan-out, backpressure, cross-loop delivery.
 - [Agents](agents.md) — one handler, served to humans and to models.
-- [Why Aether is built this way](design/why.md) — the design decisions and their cost.
+- [Why Oxbrook is built this way](design/why.md) — the design decisions and their cost.

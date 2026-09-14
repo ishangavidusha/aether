@@ -4,7 +4,7 @@ A page on another origin can only call the app from a browser if the app says
 it may.
 
 ```python
-from aether import App, CORS
+from oxbrook import App, CORS
 
 app = App(cors=CORS(allow_origins=["https://app.example.com"]))
 ```

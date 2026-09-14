@@ -206,8 +206,8 @@ pub async fn pump(
     }
 }
 
-/// The handler's side of a streaming body. Wrapped by `aether.BodyStream`.
-#[pyclass(frozen, name = "BodyReader", module = "aether._core")]
+/// The handler's side of a streaming body. Wrapped by `oxbrook.BodyStream`.
+#[pyclass(frozen, name = "BodyReader", module = "oxbrook._core")]
 pub struct BodyReader {
     shared: Arc<BodyShared>,
 }
@@ -218,7 +218,7 @@ impl BodyReader {
     }
 }
 
-/// `poll` results, mirrored in `aether._bodies`.
+/// `poll` results, mirrored in `oxbrook._bodies`.
 const DATA: u8 = 0;
 const PENDING: u8 = 1;
 const END: u8 = 2;

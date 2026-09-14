@@ -6,7 +6,7 @@ invariants that would actually break a deployment.
 """
 import sys
 
-from aether import _workers
+from oxbrook import _workers
 
 
 def main() -> None:

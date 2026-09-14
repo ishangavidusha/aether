@@ -12,7 +12,7 @@ Two jobs:
 
 **Identity.** `fingerprint()` describes the host in enough detail to explain a
 surprise later: CPU model, how many cores of which kind, memory, kernel,
-whether it is virtualised, and what `aether._workers` made of all that. The
+whether it is virtualised, and what `oxbrook._workers` made of all that. The
 last one matters most — worker-count detection is the thing under test on any
 machine that is not this one, and recording its answer beside the throughput is
 how it gets checked rather than assumed.
@@ -209,14 +209,14 @@ def steal_fraction(before: tuple[int, ...] | None, after: tuple[int, ...] | None
 
 
 def worker_detection() -> dict | None:
-    """What `aether._workers` concluded about this machine.
+    """What `oxbrook._workers` concluded about this machine.
 
     Recorded on every run because it is itself untested anywhere but the
     machine it was written on: the hybrid-core probes have never seen a hybrid
     Linux host, and the cgroup probe has never seen a real quota.
     """
     try:
-        from aether._workers import describe
+        from oxbrook._workers import describe
     except Exception:
         return None
     try:
@@ -275,7 +275,7 @@ def fingerprint(executable: str | None = None) -> dict:
         "fd_limit": fd_limit(),
         "loadavg": list(os.getloadavg()),
         "python": python_build(executable),
-        "aether": git_commit(),
+        "oxbrook": git_commit(),
         "toolchain": toolchain(),
         "worker_detection": worker_detection(),
     }
@@ -409,8 +409,8 @@ class Session:
         print(summarise(self.facts))
         python = self.facts["python"]
         print(f"python: {python['version']} {python['build']}   "
-              f"aether: {self.facts['aether']['commit']}"
-              f"{' (dirty)' if self.facts['aether']['dirty'] else ''}")
+              f"oxbrook: {self.facts['oxbrook']['commit']}"
+              f"{' (dirty)' if self.facts['oxbrook']['dirty'] else ''}")
         # Flush before writing to stderr, or the warnings land above the
         # summary they are about when the two streams are buffered differently.
         sys.stdout.flush()

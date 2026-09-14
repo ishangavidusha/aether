@@ -51,7 +51,7 @@ jobs:
 
       - name: Assert the API reference is not empty
         run: |
-          grep -q 'id="aether.App.route"' site/reference/app/index.html || {
+          grep -q 'id="oxbrook.App.route"' site/reference/app/index.html || {
             echo "::error::The reference rendered without any API. The extension did not import."
             exit 1
           }

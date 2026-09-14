@@ -18,15 +18,15 @@ use crate::websocket::WebSocket;
 /// Callable handed to `loop.add_reader`. asyncio invokes it on the worker's own
 /// thread whenever the wake socket becomes readable, and it drains every queued
 /// request in that one callback.
-#[pyclass(frozen, name = "Drainer", module = "aether._core")]
+#[pyclass(frozen, name = "Drainer", module = "oxbrook._core")]
 struct Drainer {
     queue: Arc<WorkerQueue>,
     routes: Arc<Vec<Py<PyAny>>>,
     gates: Arc<Vec<Option<Py<PyAny>>>>,
     router: Arc<Router>,
-    /// `aether._runtime.run_handler`, an async function.
+    /// `oxbrook._runtime.run_handler`, an async function.
     run_handler: Py<PyAny>,
-    /// `aether._runtime.run_websocket`, for upgraded connections.
+    /// `oxbrook._runtime.run_websocket`, for upgraded connections.
     run_websocket: Py<PyAny>,
     /// Constructors for parameter types Rust validated but cannot build.
     make_uuid: Py<PyAny>,
@@ -189,11 +189,11 @@ impl Worker {
         let (tx, rx) = mpsc::channel::<PyResult<(Py<PyAny>, Py<PyAny>)>>();
 
         let handle = thread::Builder::new()
-            .name(format!("aether-py-{index}"))
+            .name(format!("oxbrook-py-{index}"))
             .spawn(move || {
                 Python::attach(|py| {
                     let event_loop = match py
-                        .import("aether._runtime")
+                        .import("oxbrook._runtime")
                         .and_then(|runtime| runtime.call_method0("make_worker_loop"))
                     {
                         Ok(event_loop) => event_loop,
@@ -219,7 +219,7 @@ impl Worker {
                     };
 
                     let started = (|| -> PyResult<(i32, Py<PyAny>)> {
-                        let runtime = py.import("aether._runtime")?;
+                        let runtime = py.import("oxbrook._runtime")?;
                         let drainer = Drainer {
                             queue: worker_queue,
                             routes,
@@ -249,7 +249,7 @@ impl Worker {
                                 event_loop.call_method1("run_until_complete", (coro,))
                             });
                         if let Err(e) = stopped {
-                            eprintln!("aether: worker {index} lifespan teardown raised");
+                            eprintln!("oxbrook: worker {index} lifespan teardown raised");
                             e.print(py);
                         }
                         let _ = event_loop.call_method0("close");

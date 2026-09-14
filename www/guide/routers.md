@@ -5,7 +5,7 @@ another.
 
 ```python
 # users.py
-from aether import Request, Router
+from oxbrook import Request, Router
 
 router = Router(prefix="/users")
 
@@ -21,7 +21,7 @@ async def update_user(_: Request, user_id: int): ...
 
 ```python
 # main.py
-from aether import App
+from oxbrook import App
 import users
 
 app = App()
@@ -44,7 +44,7 @@ with one.
 | `/users` | `@router.get("/{user_id}")` | `/users/{user_id}` |
 
 The first two are different routes. A trailing slash is significant everywhere
-in Aether, and a router does not change that.
+in Oxbrook, and a router does not change that.
 
 A prefix can declare path parameters. The handler accepts them like any other:
 

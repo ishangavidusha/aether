@@ -1,9 +1,9 @@
-site_name: Aether
+site_name: Oxbrook
 site_description: A fast Python REST framework with a Rust core, built-in streams, and agent-native interfaces.
 site_author: Ishanga Vidusha
-site_url: https://ishangavidusha.github.io/aether/
-repo_url: https://github.com/ishangavidusha/aether
-repo_name: ishangavidusha/aether
+site_url: https://ishangavidusha.github.io/oxbrook/
+repo_url: https://github.com/ishangavidusha/oxbrook
+repo_name: ishangavidusha/oxbrook
 docs_dir: www
 site_dir: site
 
