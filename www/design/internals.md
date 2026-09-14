@@ -43,6 +43,10 @@ python/aether/  App, routing, pydantic, OpenAPI, topics, SSE, sockets, runtime
 Two properties carry the design: Python is only ever touched from the worker's
 own thread, and a burst of requests collapses into one wakeup.
 
+A WebSocket upgrade takes a branch after step 2: its `Origin` is checked in Rust,
+and a refused origin is answered `403` before an authorizer or handler is ever
+queued.
+
 On the way back out, CORS headers are added in Rust to every response, including
 the ones the server produced itself in step 2.
 
@@ -127,7 +131,7 @@ surfaces. At shutdown the server waits for every worker thread, bounded by
 
 ## Testing
 
-Twenty-three standalone scripts under `tests/`, each exiting non-zero on
+Twenty-four standalone scripts under `tests/`, each exiting non-zero on
 failure, run against a real server on a real socket.
 
 ```bash
@@ -147,5 +151,7 @@ a running server before it was fixed.
 
 - No TLS and no HTTP/2. Expects a terminating proxy in front.
 - Middleware does not wrap socket handlers, only their authorizer.
+- WebSocket origins are exact strings; there are no patterns for preview
+  deployments.
 - MCP is POST/JSON only: no streaming responses, no server-to-client channel,
   no resource subscriptions.

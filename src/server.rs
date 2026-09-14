@@ -25,6 +25,7 @@ use tokio_stream::StreamExt;
 
 use crate::body::BodyShared;
 use crate::cors::{Cors, CorsTuple};
+use crate::origin::{OriginsTuple, SocketOrigins};
 use crate::queue::Pending;
 use crate::responder::{Body, Reply};
 use crate::router::{RouteError, RouteTuple, Router, SpecTuple};
@@ -43,6 +44,8 @@ struct State {
     max_message: usize,
     /// None when the app configured no CORS, which costs one branch.
     cors: Option<Arc<Cors>>,
+    /// Checked on every upgrade, before the authorizer or handler.
+    socket_origins: SocketOrigins,
 }
 
 #[pyclass(name = "Server", module = "aether._core")]
@@ -66,6 +69,7 @@ pub struct Server {
     /// `aether._lifecycle.Lifecycle`: runs the worker lifespan on each loop.
     lifecycle: Py<PyAny>,
     cors: Option<CorsTuple>,
+    socket_origins: OriginsTuple,
 }
 
 /// (method, path, handler, params, is_websocket, authorizer, streams_body)
@@ -82,7 +86,7 @@ type Route = (
 #[pymethods]
 impl Server {
     #[new]
-    /// Fourteen arguments, which clippy dislikes. This is the Python
+    /// Fifteen arguments, which clippy dislikes. This is the Python
     /// constructor: the signature *is* the API, and collapsing it into a
     /// config object would move the same fields behind a dict that Python has
     /// to build on every server start.
@@ -102,6 +106,7 @@ impl Server {
         routes: Vec<Route>,
         lifecycle: Py<PyAny>,
         cors: Option<CorsTuple>,
+        socket_origins: OriginsTuple,
     ) -> Self {
         Self {
             host,
@@ -122,6 +127,7 @@ impl Server {
             routes,
             lifecycle,
             cors,
+            socket_origins,
         }
     }
 
@@ -220,6 +226,7 @@ impl Server {
             max_body: self.max_body,
             max_message: self.max_message,
             cors,
+            socket_origins: SocketOrigins::build(self.socket_origins.clone()),
         });
 
         let addr: SocketAddr = format!("{}:{}", self.host, self.port)
@@ -557,6 +564,15 @@ async fn upgrade_websocket(
             )))
             .unwrap();
     };
+
+    // Before anything application-level runs: a page on another site must not
+    // be able to reach an authorizer or handler with the user's cookies.
+    if !state.socket_origins.permits(req.headers()) {
+        return plain(
+            StatusCode::FORBIDDEN,
+            "websocket origin not allowed; list it in App(websocket_origins=[...])",
+        );
+    }
 
     // Ask the application before switching protocols. Once the 101 is sent it
     // is too late to refuse, which is why this cannot be left to the handler.

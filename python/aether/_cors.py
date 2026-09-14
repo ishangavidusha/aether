@@ -16,7 +16,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 
-def _origin(value: str) -> str:
+def check_origin(value: str) -> str:
     if value == "*":
         return value
     if not isinstance(value, str) or "://" not in value or value.endswith("/"):
@@ -54,7 +54,7 @@ class CORS:
     def __post_init__(self) -> None:
         if isinstance(self.allow_origins, str):
             raise TypeError("allow_origins is a list of origins, not a single string")
-        origins = tuple(_origin(o) for o in self.allow_origins)
+        origins = tuple(check_origin(o) for o in self.allow_origins)
         if not origins:
             raise ValueError("allow_origins is empty; list at least one origin")
         if "*" in origins and self.allow_credentials:

@@ -42,6 +42,53 @@ await ws.close()
 
 Ping and Pong are answered underneath and never reach the handler.
 
+## Which sites may connect
+
+A browser attaches the user's cookies to a WebSocket handshake, and does not
+apply CORS to it. Without a check, a page on any website could open a socket to
+the app and act as the signed-in user. So every upgrade is checked against its
+`Origin` header before the authorizer or the handler runs, and the server
+answers `403` to one it does not accept.
+
+| the handshake | accepted |
+|---|---|
+| has no `Origin` header | yes: it is not from a browser |
+| comes from the app's own origin | yes |
+| comes from an origin listed in `websocket_origins` | yes |
+| comes from anywhere else | no |
+
+"The app's own origin" means the host in `Origin` matches the request's `Host`,
+or `X-Forwarded-Host` when a proxy has rewritten `Host`. Neither header can be
+set by a web page, so neither can be used to get around the check.
+
+`websocket_origins` defaults to the app's [CORS](../guide/cors.md) origins, so a
+frontend already allowed to call the API can open sockets too:
+
+```python
+app = App(cors=CORS(allow_origins=["https://app.example.com"]))
+# sockets: the app's own origin, and https://app.example.com
+```
+
+Set it to choose the list independently. It replaces the CORS origins rather
+than adding to them:
+
+```python
+app = App(websocket_origins=["https://app.example.com", "http://localhost:5173"])
+```
+
+A CORS policy of `["*"]` does not open sockets to every origin. `*` is the CORS
+setting that forbids credentials, and a socket handshake always carries them.
+To accept sockets from any origin deliberately — a public feed with no
+authentication — say so:
+
+```python
+app = App(websocket_origins=["*"])
+```
+
+The origin check is not authentication. It stops other websites from using a
+visitor's cookies; it does nothing against a client that is not a browser,
+which can send any `Origin` it likes. Authenticate in the authorizer.
+
 ## Refusing a connection
 
 `authorize` runs **before** the handshake, which the handler cannot do: by the

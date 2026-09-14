@@ -4,7 +4,7 @@ import sys
 from typing import Any
 
 from . import _openapi
-from ._cors import CORS
+from ._cors import CORS, check_origin
 from ._errors import DEFAULT_HANDLERS
 from ._errors import guard as guard_exceptions
 from ._lifecycle import Lifecycle, ServerHandle, State, check_hook
@@ -57,6 +57,7 @@ class App:
         lifespan: Any = None,
         worker_lifespan: Any = None,
         cors: CORS | None = None,
+        websocket_origins: Any = None,
     ) -> None:
         """`openapi_url` and `docs_url` can each be set to None to disable them.
 
@@ -81,6 +82,15 @@ class App:
 
         `cors` lets pages on other origins call the app from a browser. Applied
         in Rust, to every response including the ones no handler produced.
+
+        `websocket_origins` lists the other origins whose pages may open a
+        WebSocket. Browsers do not apply CORS to sockets and send cookies with
+        the handshake, so without a check any website could open an
+        authenticated socket as the user. A socket is accepted with no
+        `Origin` (not a browser), from this server's own origin, or from a
+        listed one; anything else is refused with `403` before an authorizer or
+        handler runs. Left unset, the list is the CORS origins, excluding `*`.
+        `["*"]` turns the check off.
         """
         self.routes: list[RouteInfo] = []
         self._middleware: list[Any] = []
@@ -103,6 +113,11 @@ class App:
         if cors is not None and not isinstance(cors, CORS):
             raise TypeError(f"cors must be a CORS(...), got {type(cors).__name__}")
         self.cors = cors
+        if websocket_origins is not None:
+            if isinstance(websocket_origins, str):
+                raise TypeError("websocket_origins is a list of origins, not a single string")
+            websocket_origins = tuple(check_origin(o) for o in websocket_origins)
+        self.websocket_origins = websocket_origins
         self.lifespan = check_hook(lifespan, "lifespan")
         self.worker_lifespan = check_hook(worker_lifespan, "worker_lifespan")
         #: What `lifespan` yielded, while a server is running. Empty otherwise.
@@ -534,5 +549,20 @@ class App:
             specs,
             lifecycle,
             None if self.cors is None else self.cors.as_spec(),
+            self._socket_origins(),
         )
         return ServerHandle(core, lifecycle)
+
+    def _socket_origins(self) -> tuple[bool, list[str]]:
+        """(any origin, allowed origins) for the upgrade check.
+
+        CORS `*` never opens sockets: it is the setting that forbids
+        credentials, and a socket handshake always carries them.
+        """
+        if self.websocket_origins is not None:
+            listed = self.websocket_origins
+        elif self.cors is not None:
+            listed = tuple(o for o in self.cors.allow_origins if o != "*")
+        else:
+            listed = ()
+        return "*" in listed, [o for o in listed if o != "*"]

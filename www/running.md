@@ -84,6 +84,12 @@ Aether speaks HTTP/1.1 with no TLS and no HTTP/2. **Put a terminating proxy in
 front of it** — nginx, Caddy, a cloud load balancer — and let that handle TLS,
 HTTP/2 and whatever else the edge needs.
 
+WebSocket upgrades are accepted from the app's own origin, which is recognised
+through `Host` or `X-Forwarded-Host`. A proxy that rewrites `Host` without
+setting `X-Forwarded-Host` makes every browser socket look cross-origin and
+refused with `403`; forward the original host, or list the public origin in
+`websocket_origins`.
+
 If the proxy also adds CORS headers, configure CORS in one place only: two
 `Access-Control-Allow-Origin` headers on one response make a browser reject it.
 A proxy that buffers request bodies defeats a [streaming

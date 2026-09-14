@@ -82,15 +82,8 @@ With no `cors` configured, none of this runs and nothing is added.
 
 ## WebSockets
 
-Browsers do not apply CORS to WebSocket connections. A page on any origin can
-open one. To restrict which sites may connect, check `Origin` in the socket's
-authorizer:
-
-```python
-async def same_site(request):
-    if request.header("origin") not in {"https://app.example.com"}:
-        raise HTTPError(403)
-
-@app.websocket("/live", authorize=same_site)
-async def live(request, ws): ...
-```
+Browsers do not apply CORS to WebSocket connections, so the server checks a
+socket's `Origin` separately, before the handshake. By default the origins in
+`allow_origins` may open sockets, along with the app's own origin; `*` does not
+extend to sockets. Set `App(websocket_origins=[...])` to choose a different
+list. See [which sites may connect](../streams/websockets.md#which-sites-may-connect).
